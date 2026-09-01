@@ -10,7 +10,7 @@ permissions:
   contents: write
 
 env:
-  THEOS: /opt/theos
+  THEOS: ${{ github.workspace }}/theos
   THEOS_PACKAGE_SCHEME: roothide
   SDK_VERSION: '16.5'
   TARGET: iphone:clang:16.5:15.0
@@ -34,7 +34,7 @@ jobs:
       - name: Install roothide Theos and SDK
         run: |
           set -e
-          sudo rm -rf "$THEOS"
+          rm -rf "$THEOS"
           git clone --recursive https://github.com/roothide/theos.git "$THEOS"
           mkdir -p "$THEOS/sdks"
           git clone -n --depth=1 --filter=tree:0 https://github.com/theos/sdks.git "$RUNNER_TEMP/sdks"
