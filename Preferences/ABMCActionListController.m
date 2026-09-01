@@ -42,10 +42,19 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target) {
     return spec;
 }
 
+@interface ABMCActionListController ()
+- (instancetype)initWithSpecifier:(PSSpecifier *)specifier;
+@end
+
 @implementation ABMCActionListController {
     NSString *_prefKey;
     NSString *_currentValue;
     NSString *_category;
+}
+
+- (instancetype)initWithSpecifier:(PSSpecifier *)specifier {
+    self = [super initWithSpecifier:specifier];
+    return self;
 }
 
 - (void)viewDidLoad {
