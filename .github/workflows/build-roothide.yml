@@ -1,0 +1,86 @@
+name: Build RealActionButton RootHide
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags: ['v*.*.*']
+
+permissions:
+  contents: write
+
+env:
+  THEOS: /opt/theos
+  THEOS_PACKAGE_SCHEME: roothide
+  SDK_VERSION: '16.5'
+  TARGET: iphone:clang:16.5:15.0
+  ARCHS: arm64e
+
+jobs:
+  build:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Install build tools
+        run: |
+          brew install ldid xz gnu-tar pkg-config make dpkg
+          echo "$(brew --prefix)/opt/make/libexec/gnubin" >> "$GITHUB_PATH"
+
+      - name: Install roothide Theos and SDK
+        run: |
+          set -e
+          sudo rm -rf "$THEOS"
+          git clone --recursive https://github.com/roothide/theos.git "$THEOS"
+          mkdir -p "$THEOS/sdks"
+          git clone -n --depth=1 --filter=tree:0 https://github.com/theos/sdks.git "$RUNNER_TEMP/sdks"
+          cd "$RUNNER_TEMP/sdks"
+          git sparse-checkout set --no-cone "iPhoneOS${SDK_VERSION}.sdk"
+          git checkout
+          cp -R "iPhoneOS${SDK_VERSION}.sdk" "$THEOS/sdks/"
+          test -f "$THEOS/vendor/mod/roothide/package/deb.mk"
+          test -f "$THEOS/sdks/iPhoneOS${SDK_VERSION}.sdk/SDKSettings.json"
+
+      - name: Clean build RootHide arm64e package
+        run: |
+          set -o pipefail
+          make clean PACKAGE_VARIANT=roothide
+          make package FINALPACKAGE=1 PACKAGE_VARIANT=roothide 2>&1 | tee build.log
+
+      - name: Verify package and Mach-O architecture
+        run: |
+          set -e
+          DEB="$(find . -maxdepth 4 -type f -name '*.deb' -print | head -n 1)"
+          test -n "$DEB"
+          dpkg-deb --info "$DEB"
+          dpkg-deb --contents "$DEB"
+          test "$(dpkg-deb -f "$DEB" Architecture)" = iphoneos-arm64e
+          DYLIB="$(find .theos packages -type f -name '*.dylib' -print 2>/dev/null | head -n 1)"
+          if [ -z "$DYLIB" ]; then
+            DYLIB="$(dpkg-deb --contents "$DEB" | awk '{print $NF}' | grep '\.dylib$' | head -n 1)"
+            DYLIB="${DYLIB#./}"
+            dpkg-deb --fsys-tarfile "$DEB" | tar -xOf - "$DYLIB" > /tmp/RealActionButton.dylib
+            DYLIB=/tmp/RealActionButton.dylib
+          fi
+          file "$DYLIB"
+          file "$DYLIB" | grep -E 'arm64e|arm64'
+          mkdir -p out
+          cp "$DEB" out/
+          cp build.log out/
+
+      - name: Upload RootHide deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: RealActionButton-roothide-arm64e
+          path: out/*
+          if-no-files-found: error
+
+      - name: Attach deb to tagged release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.deb
