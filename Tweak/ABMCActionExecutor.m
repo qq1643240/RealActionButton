@@ -393,7 +393,18 @@ BOOL ABMCPerformingDefaultAction = NO;
             resolved = [resolved stringByReplacingOccurrencesOfString:@"$$$" withString:replacement];
             [self openURLString:resolved];
         }]];
-        UIViewController *presenter = [UIApplication sharedApplication].keyWindow.rootViewController;
+        UIViewController *presenter = nil;
+        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
+            if (scene.activationState != UISceneActivationStateForegroundActive || ![scene isKindOfClass:[UIWindowScene class]]) continue;
+            for (UIWindow *window in ((UIWindowScene *)scene).windows) {
+                if (window.isKeyWindow) {
+                    presenter = window.rootViewController;
+                    break;
+                }
+            }
+            if (presenter) break;
+        }
+        if (!presenter) return;
         while (presenter.presentedViewController) presenter = presenter.presentedViewController;
         [presenter presentViewController:alert animated:YES completion:nil];
     });
