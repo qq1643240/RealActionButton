@@ -76,6 +76,8 @@ BOOL ABMCPerformingDefaultAction = NO;
 
     if ([actionID isEqualToString:@"default"]) {
         [self performDefaultAction];
+    } else if ([actionID isEqualToString:@"flashlight"]) {
+        [self toggleFlashlight];
     } else if ([actionID isEqualToString:@"camera"]) {
         [self openApp:@"com.apple.camera"];
     } else if ([actionID isEqualToString:@"silent"]) {

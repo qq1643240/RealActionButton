@@ -13,6 +13,10 @@ static NSString *ABMCActionTitle(NSString *actionID) {
         @"respring": @"重启", @"controlCenter": @"控中", @"notificationCenter": @"通知",
         @"spotlight": @"聚焦", @"screenRecord": @"录屏", @"mediaPlayPause": @"播放",
         @"mediaPrevious": @"上曲", @"mediaNext": @"下曲", @"closeApps": @"关应",
+        @"url:weixin://scanqrcode": @"微信扫一扫",
+        @"url:weixin://widget/pay": @"微信付款码",
+        @"url:alipay://platformapi/startapp?appId=10000007": @"支付宝扫一扫",
+        @"url:alipay://platformapi/startapp?appId=20000056": @"支付宝付款码",
         @"none": @"关闭"
     };
     NSString *title = titles[actionID];
@@ -52,28 +56,39 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target) {
     NSString *_category;
 }
 
-- (instancetype)initWithSpecifier:(PSSpecifier *)specifier {
+- (instancetype)initWithPreferenceKey:(NSString *)preferenceKey category:(NSString *)category {
     self = [super init];
     if (self) {
-        _prefKey = [[specifier propertyForKey:@"key"] copy];
-        _category = [[specifier propertyForKey:@"category"] copy];
-        NSString *fallback = [specifier propertyForKey:@"default"] ?: @"none";
-        CFPreferencesAppSynchronize((__bridge CFStringRef)PREFS_DOMAIN);
-        CFStringRef value = (CFStringRef)CFPreferencesCopyAppValue((__bridge CFStringRef)_prefKey, (__bridge CFStringRef)PREFS_DOMAIN);
-        _currentValue = value ? (__bridge_transfer NSString *)value : fallback;
+        _prefKey = [preferenceKey copy];
+        _category = [category copy];
+        [self loadCurrentValueWithFallback:@"none"];
         self.title = _category.length ? [self categoryTitle] : @"选择动作";
     }
     return self;
 }
 
-- (void)viewDidLoad {
-    [super viewDidLoad];
-    PSSpecifier *parent = [self specifier];
-    _prefKey = [parent propertyForKey:@"key"];
-    _category = [parent propertyForKey:@"category"];
+- (instancetype)initWithSpecifier:(PSSpecifier *)specifier {
+    return [self initWithPreferenceKey:[specifier propertyForKey:@"key"] category:[specifier propertyForKey:@"category"]];
+}
+
+- (void)loadCurrentValueWithFallback:(NSString *)fallback {
+    if (!_prefKey.length) {
+        _currentValue = [fallback copy];
+        return;
+    }
     CFPreferencesAppSynchronize((__bridge CFStringRef)PREFS_DOMAIN);
     CFStringRef value = (CFStringRef)CFPreferencesCopyAppValue((__bridge CFStringRef)_prefKey, (__bridge CFStringRef)PREFS_DOMAIN);
-    _currentValue = value ? (__bridge_transfer NSString *)value : @"none";
+    _currentValue = value ? (__bridge_transfer NSString *)value : [fallback copy];
+}
+
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    if (!_prefKey.length) {
+        PSSpecifier *parent = [self specifier];
+        _prefKey = [[parent propertyForKey:@"key"] copy];
+        _category = [[parent propertyForKey:@"category"] copy];
+        [self loadCurrentValueWithFallback:[parent propertyForKey:@"default"] ?: @"none"];
+    }
     self.title = _category.length ? [self categoryTitle] : @"选择动作";
 }
 
@@ -93,12 +108,15 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target) {
             NSArray *categories = @[@[@"基础", @"category:basic"], @[@"应用", @"category:apps"], @[@"方式", @"category:shortcuts"], @[@"指令", @"category:commands"], @[@"链接", @"category:links"], @[@"预设", @"category:presets"]];
             for (NSArray *item in categories) [specs addObject:ABMCRow(item[0], item[1], self)];
         } else if ([_category isEqualToString:@"basic"]) {
-            [specs addObject:[PSSpecifier groupSpecifierWithName:@"基础动作"]];
+            [specs addObject:[PSSpecifier groupSpecifierWithName:@"基础"]];
             NSArray *actions = @[
         @[@"默认", @"default"], @[@"手电", @"flashlight"], @[@"相机", @"camera"], @[@"静音", @"silent"],
                 @[@"截屏", @"screenshot"], @[@"控中", @"controlCenter"], @[@"通知", @"notificationCenter"],
                 @[@"聚焦", @"spotlight"], @[@"录屏", @"screenRecord"], @[@"锁屏", @"lock"], @[@"播放", @"mediaPlayPause"],
-                @[@"上曲", @"mediaPrevious"], @[@"下曲", @"mediaNext"], @[@"关应", @"closeApps"], @[@"重启", @"respring"], @[@"关闭", @"none"]
+                @[@"上曲", @"mediaPrevious"], @[@"下曲", @"mediaNext"], @[@"关应", @"closeApps"], @[@"重启", @"respring"],
+                @[@"微信扫一扫", @"url:weixin://scanqrcode"], @[@"微信付款码", @"url:weixin://widget/pay"],
+                @[@"支付宝扫一扫", @"url:alipay://platformapi/startapp?appId=10000007"], @[@"支付宝付款码", @"url:alipay://platformapi/startapp?appId=20000056"],
+                @[@"关闭", @"none"]
             ];
             for (NSArray *item in actions) [specs addObject:ABMCRow(item[0], item[1], self)];
         } else if ([_category isEqualToString:@"apps"]) {
@@ -161,10 +179,7 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target) {
     NSString *actionID = [specifier propertyForKey:@"actionID"];
     if ([actionID isEqualToString:@"__selected__"]) return;
     if ([actionID hasPrefix:@"category:"]) {
-        PSSpecifier *childSpecifier = [PSSpecifier preferenceSpecifierNamed:@"选择动作" target:nil set:NULL get:NULL detail:Nil cell:PSStaticTextCell edit:Nil];
-        [childSpecifier setProperty:_prefKey forKey:@"key"];
-        [childSpecifier setProperty:[actionID substringFromIndex:9] forKey:@"category"];
-        ABMCActionListController *child = [[ABMCActionListController alloc] initWithSpecifier:childSpecifier];
+        ABMCActionListController *child = [[ABMCActionListController alloc] initWithPreferenceKey:_prefKey category:[actionID substringFromIndex:9]];
         [self.navigationController pushViewController:child animated:YES];
         return;
     }

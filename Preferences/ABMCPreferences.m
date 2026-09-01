@@ -21,6 +21,10 @@ static NSString *titleForActionID(NSString *actionID) {
     if ([actionID isEqualToString:@"mediaNext"]) return @"下一首";
     if ([actionID isEqualToString:@"closeApps"]) return @"关应用";
     if ([actionID isEqualToString:@"respring"]) return @"重启";
+    if ([actionID isEqualToString:@"url:weixin://scanqrcode"]) return @"微信扫一扫";
+    if ([actionID isEqualToString:@"url:weixin://widget/pay"]) return @"微信付款码";
+    if ([actionID isEqualToString:@"url:alipay://platformapi/startapp?appId=10000007"]) return @"支付宝扫一扫";
+    if ([actionID isEqualToString:@"url:alipay://platformapi/startapp?appId=20000056"]) return @"支付宝付款码";
     if ([actionID hasPrefix:@"app:"]) return [NSString stringWithFormat:@"应用：%@", [actionID substringFromIndex:4]];
     if ([actionID hasPrefix:@"shortcut:"]) return [NSString stringWithFormat:@"指令：%@", [actionID substringFromIndex:9]];
     if ([actionID hasPrefix:@"customURL:"]) return [NSString stringWithFormat:@"网址：%@", [actionID substringFromIndex:10]];
