@@ -3,7 +3,6 @@
 #import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
-#import <dlfcn.h>
 
 #define PREFS_DOMAIN CFSTR("com.huynguyen.actionbuttonmulticlick")
 
@@ -11,7 +10,10 @@ BOOL ABMCPerformingDefaultAction = NO;
 
 @interface ABMCActionExecutor ()
 - (void)openURLString:(NSString *)urlString;
-- (void)toggleVPN;
+- (void)openConfiguredURL:(NSString *)urlString;
+- (void)invokeSystemAction:(NSString *)selectorName;
+- (void)invokeMediaSelector:(NSString *)selectorName;
+- (void)invokeMediaSelector:(NSString *)selectorName argument:(id)argument;
 @end
 
 @implementation ABMCActionExecutor {
@@ -74,8 +76,6 @@ BOOL ABMCPerformingDefaultAction = NO;
 
     if ([actionID isEqualToString:@"default"]) {
         [self performDefaultAction];
-    } else if ([actionID isEqualToString:@"flashlight"]) {
-        [self toggleFlashlight];
     } else if ([actionID isEqualToString:@"camera"]) {
         [self openApp:@"com.apple.camera"];
     } else if ([actionID isEqualToString:@"silent"]) {
@@ -84,8 +84,24 @@ BOOL ABMCPerformingDefaultAction = NO;
         [self takeScreenshot];
     } else if ([actionID isEqualToString:@"lock"]) {
         [self lockDevice];
-    } else if ([actionID isEqualToString:@"vpn"]) {
-        [self toggleVPN];
+    } else if ([actionID isEqualToString:@"respring"]) {
+        [self respring];
+    } else if ([actionID isEqualToString:@"controlCenter"]) {
+        [self invokeSystemAction:@"_showControlCenter"];
+    } else if ([actionID isEqualToString:@"notificationCenter"]) {
+        [self invokeSystemAction:@"_showNotificationCenter"];
+    } else if ([actionID isEqualToString:@"spotlight"]) {
+        [self invokeSystemAction:@"_activateSpotlight"];
+    } else if ([actionID isEqualToString:@"screenRecord"]) {
+        [self invokeSystemAction:@"_toggleScreenRecording"];
+    } else if ([actionID isEqualToString:@"mediaPlayPause"]) {
+        [self invokeMediaSelector:@"togglePlayPause"];
+    } else if ([actionID isEqualToString:@"mediaPrevious"]) {
+        [self invokeMediaSelector:@"changeTrack:" argument:@(-1)];
+    } else if ([actionID isEqualToString:@"mediaNext"]) {
+        [self invokeMediaSelector:@"changeTrack:" argument:@(1)];
+    } else if ([actionID isEqualToString:@"closeApps"]) {
+        [self invokeSystemAction:@"_dismissSwitcherIfNecessary"];
     } else if ([actionID hasPrefix:@"app:"]) {
         [self openApp:[actionID substringFromIndex:4]];
     } else if ([actionID hasPrefix:@"shortcut:"]) {
@@ -93,7 +109,7 @@ BOOL ABMCPerformingDefaultAction = NO;
     } else if ([actionID hasPrefix:@"url:"]) {
         [self openURLString:[actionID substringFromIndex:4]];
     } else if ([actionID hasPrefix:@"customURL:"]) {
-        [self openURLString:[actionID substringFromIndex:10]];
+        [self openConfiguredURL:[actionID substringFromIndex:10]];
     }
 }
 
@@ -298,25 +314,33 @@ BOOL ABMCPerformingDefaultAction = NO;
     } @catch (NSException *e) {}
 }
 
-- (void)toggleVPN {
+- (void)invokeSystemAction:(NSString *)selectorName {
+    if (!selectorName.length) return;
     @try {
-        // VPNConnectionStore lives in the system VPN Preferences bundle, not SpringBoard.
-        dlopen("/System/Library/PreferenceBundles/VPNPreferences.bundle/VPNPreferences", RTLD_LAZY);
-        Class storeClass = NSClassFromString(@"VPNConnectionStore");
-        SEL sharedSel = NSSelectorFromString(@"sharedInstance");
-        id store = [storeClass respondsToSelector:sharedSel] ? ((id (*)(id, SEL))objc_msgSend)(storeClass, sharedSel) : nil;
-        SEL currentSel = NSSelectorFromString(@"currentConnection");
-        id connection = (store && [store respondsToSelector:currentSel]) ? ((id (*)(id, SEL))objc_msgSend)(store, currentSel) : nil;
-        if (!connection) return;
-
-        SEL connectedSel = NSSelectorFromString(@"connected");
-        BOOL connected = [connection respondsToSelector:connectedSel] && ((BOOL (*)(id, SEL))objc_msgSend)(connection, connectedSel);
-        SEL actionSel = NSSelectorFromString(connected ? @"disconnect" : @"connect");
-        if ([connection respondsToSelector:actionSel]) {
-            ((void (*)(id, SEL))objc_msgSend)(connection, actionSel);
+        id app = [UIApplication sharedApplication];
+        SEL selector = NSSelectorFromString(selectorName);
+        if ([app respondsToSelector:selector]) {
+            ((void (*)(id, SEL))objc_msgSend)(app, selector);
         }
     } @catch (NSException *exception) {
-        // No configured VPN or an unavailable system API safely does nothing.
+        // Private system actions are optional and must fail safely.
+    }
+}
+
+- (void)invokeMediaSelector:(NSString *)selectorName {
+    [self invokeMediaSelector:selectorName argument:nil];
+}
+
+- (void)invokeMediaSelector:(NSString *)selectorName argument:(id)argument {
+    if (!selectorName.length) return;
+    @try {
+        id app = [UIApplication sharedApplication];
+        SEL selector = NSSelectorFromString(selectorName);
+        if ([app respondsToSelector:selector]) {
+            ((void (*)(id, SEL, id))objc_msgSend)(app, selector, argument);
+        }
+    } @catch (NSException *exception) {
+        // Media controls are optional on some iOS builds.
     }
 }
 
@@ -338,6 +362,40 @@ BOOL ABMCPerformingDefaultAction = NO;
         } @catch (NSException *exception) {
             // A malformed or unsupported scheme must never affect SpringBoard.
         }
+    });
+}
+
+- (void)openConfiguredURL:(NSString *)urlString {
+    if (!urlString.length) return;
+
+    NSString *clipboard = [UIPasteboard generalPasteboard].string ?: @"";
+    BOOL needsClipboardInput = [urlString containsString:@"$$$"] && !clipboard.length;
+    BOOL needsKeywordInput = [urlString containsString:@"@@@"];
+    if (!needsClipboardInput && !needsKeywordInput) {
+        NSString *resolved = [urlString stringByReplacingOccurrencesOfString:@"$$$" withString:clipboard];
+        [self openURLString:resolved];
+        return;
+    }
+
+    dispatch_async(dispatch_get_main_queue(), ^{
+        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"网址" message:needsKeywordInput ? @"请输入关键词" : @"剪贴板为空，请输入内容" preferredStyle:UIAlertControllerStyleAlert];
+        [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
+            field.keyboardType = UIKeyboardTypeDefault;
+            field.autocapitalizationType = UITextAutocapitalizationTypeNone;
+            field.autocorrectionType = UITextAutocorrectionTypeNo;
+        }];
+        [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+        [alert addAction:[UIAlertAction actionWithTitle:@"打开" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
+            NSString *value = alert.textFields.firstObject.text ?: @"";
+            if (!value.length) return;
+            NSString *resolved = [urlString stringByReplacingOccurrencesOfString:@"@@@" withString:value];
+            NSString *replacement = needsClipboardInput ? value : ([UIPasteboard generalPasteboard].string ?: @"");
+            resolved = [resolved stringByReplacingOccurrencesOfString:@"$$$" withString:replacement];
+            [self openURLString:resolved];
+        }]];
+        UIViewController *presenter = [UIApplication sharedApplication].keyWindow.rootViewController;
+        while (presenter.presentedViewController) presenter = presenter.presentedViewController;
+        [presenter presentViewController:alert animated:YES completion:nil];
     });
 }
 
