@@ -6,14 +6,18 @@
 #define PREFS_NOTIFICATION @"com.huynguyen.actionbuttonmulticlick/prefsChanged"
 
 static NSString *titleForActionID(NSString *actionID) {
-    if (!actionID || [actionID isEqualToString:@"none"]) return @"无操作";
-    if ([actionID isEqualToString:@"default"]) return @"系统默认";
-    if ([actionID isEqualToString:@"flashlight"]) return @"手电筒";
+    if (!actionID || [actionID isEqualToString:@"none"]) return @"关闭";
+    if ([actionID isEqualToString:@"default"]) return @"默认";
+    if ([actionID isEqualToString:@"flashlight"]) return @"手电";
     if ([actionID isEqualToString:@"camera"]) return @"相机";
-    if ([actionID isEqualToString:@"silent"]) return @"静音模式";
+    if ([actionID isEqualToString:@"silent"]) return @"静音";
     if ([actionID isEqualToString:@"screenshot"]) return @"截屏";
-    if ([actionID isEqualToString:@"lock"]) return @"锁定屏幕";
-    if ([actionID isEqualToString:@"respring"]) return @"重启 SpringBoard";
+    if ([actionID isEqualToString:@"lock"]) return @"锁屏";
+    if ([actionID isEqualToString:@"respring"]) return @"重启";
+    if ([actionID isEqualToString:@"url:weixin://scanqrcode"]) return @"微扫";
+    if ([actionID isEqualToString:@"url:weixin://widget/pay"]) return @"微付";
+    if ([actionID isEqualToString:@"url:alipay://platformapi/startapp?appId=10000007"]) return @"支扫";
+    if ([actionID isEqualToString:@"url:alipay://platformapi/startapp?appId=20000056"]) return @"支付";
     if ([actionID hasPrefix:@"app:"]) return [NSString stringWithFormat:@"App：%@", [actionID substringFromIndex:4]];
     if ([actionID hasPrefix:@"shortcut:"]) return [NSString stringWithFormat:@"快捷指令：%@", [actionID substringFromIndex:9]];
     if ([actionID hasPrefix:@"url:"]) return [NSString stringWithFormat:@"URL：%@", [actionID substringFromIndex:4]];

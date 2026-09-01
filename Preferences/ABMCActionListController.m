@@ -8,10 +8,18 @@
 typedef struct { NSString *actionID; NSString *title; } ABMCAction;
 
 static const ABMCAction kBuiltInActions[] = {
-    { @"default", @"系统默认" }, { @"flashlight", @"手电筒" },
-    { @"camera", @"相机" }, { @"silent", @"静音模式" },
-    { @"screenshot", @"截屏" }, { @"lock", @"锁定屏幕" },
-    { @"respring", @"重启 SpringBoard" }, { @"none", @"无操作" },
+    { @"default",    @"默认" },
+    { @"flashlight", @"手电" },
+    { @"camera",     @"相机" },
+    { @"silent",      @"静音" },
+    { @"screenshot", @"截屏" },
+    { @"lock",       @"锁屏" },
+    { @"respring",   @"重启" },
+    { @"url:weixin://scanqrcode", @"微扫" },
+    { @"url:weixin://widget/pay", @"微付" },
+    { @"url:alipay://platformapi/startapp?appId=10000007", @"支扫" },
+    { @"url:alipay://platformapi/startapp?appId=20000056", @"支付" },
+    { @"none",       @"关闭" },
 };
 
 @implementation ABMCActionListController { NSString *_prefKey; NSString *_currentValue; }
@@ -37,10 +45,10 @@ static const ABMCAction kBuiltInActions[] = {
             spec->action = @selector(selectAction:);
             [specs addObject:spec];
         }
-        PSSpecifier *custom = [PSSpecifier groupSpecifierWithName:@"自定义"];
+        PSSpecifier *custom = [PSSpecifier groupSpecifierWithName:@"自设"];
         [custom setProperty:@"可按 App 的 Bundle ID、快捷指令名称或 URL / URL Scheme 执行操作。" forKey:@"footerText"];
         [specs addObject:custom];
-        NSArray *items = @[@[@"打开 App…", @"customApp"], @[@"运行快捷指令…", @"customShortcut"], @[@"打开 URL…", @"customURL"]];
+        NSArray *items = @[@[@"应用…", @"customApp"], @[@"指令…", @"customShortcut"], @[@"网址…", @"customURL"]];
         for (NSArray *item in items) {
             PSSpecifier *spec = [PSSpecifier preferenceSpecifierNamed:item[0] target:self set:NULL get:NULL detail:Nil cell:PSStaticTextCell edit:Nil];
             [spec setProperty:item[1] forKey:@"actionID"];
