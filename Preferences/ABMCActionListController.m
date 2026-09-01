@@ -42,6 +42,10 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target) {
     return spec;
 }
 
+@interface ABMCActionListController ()
+- (instancetype)initWithSpecifier:(PSSpecifier *)specifier;
+@end
+
 @implementation ABMCActionListController {
     NSString *_prefKey;
     NSString *_currentValue;
@@ -110,7 +114,7 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target) {
         } else if ([_category isEqualToString:@"presets"]) {
             [specs addObject:[PSSpecifier groupSpecifierWithName:@"预设链接"]];
             [specs addObject:ABMCRow(@"新增链接", @"customURL", self)];
-            NSArray *saved = CFPreferencesCopyAppValue(CFSTR("customLinks"), (__bridge CFStringRef)PREFS_DOMAIN);
+            NSArray *saved = (__bridge NSArray *)CFPreferencesCopyAppValue(CFSTR("customLinks"), (__bridge CFStringRef)PREFS_DOMAIN);
             for (NSDictionary *link in [saved isKindOfClass:[NSArray class]] ? saved : @[]) {
                 NSString *title = link[@"title"] ?: link[@"url"];
                 NSString *url = link[@"url"];
@@ -151,7 +155,7 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target) {
         return;
     }
     if ([actionID isEqualToString:@"customShortcut"] || [actionID isEqualToString:@"customCommand"]) {
-        [self promptForValueWithTitle:(actionID isEqualToString:@"customCommand"] ? @"快捷指令" : @"快捷方式" message:@"请输入名称：" prefix:@"shortcut:"];
+        [self promptForValueWithTitle:([actionID isEqualToString:@"customCommand"] ? @"快捷指令" : @"快捷方式") message:@"请输入名称：" prefix:@"shortcut:"];
         return;
     }
     if ([actionID isEqualToString:@"customURL"]) {
@@ -196,7 +200,7 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target) {
 
 - (void)saveCustomLink:(NSString *)url title:(NSString *)title replacing:(NSString *)existingActionID {
     CFPreferencesAppSynchronize((__bridge CFStringRef)PREFS_DOMAIN);
-    NSArray *old = CFPreferencesCopyAppValue(CFSTR("customLinks"), (__bridge CFStringRef)PREFS_DOMAIN);
+    NSArray *old = (__bridge NSArray *)CFPreferencesCopyAppValue(CFSTR("customLinks"), (__bridge CFStringRef)PREFS_DOMAIN);
     NSMutableArray *links = [NSMutableArray arrayWithArray:[old isKindOfClass:[NSArray class]] ? old : @[]];
     NSString *oldURL = [existingActionID hasPrefix:@"customURL:"] ? [existingActionID substringFromIndex:10] : nil;
     BOOL replaced = NO;
