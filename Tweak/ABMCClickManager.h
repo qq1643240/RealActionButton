@@ -10,7 +10,6 @@ typedef void (^ABMCClickCallback)(ABMCClickType clickType);
 @interface ABMCClickManager : NSObject
 
 @property (nonatomic, copy) ABMCClickCallback clickCallback;
-@property (nonatomic, assign) NSTimeInterval clickTimeout;
 
 + (instancetype)sharedManager;
 - (void)registerClick;

@@ -1,5 +1,7 @@
 #import "ABMCClickManager.h"
 
+static const uint64_t kABMCClickWindow = 240 * NSEC_PER_MSEC;
+
 @implementation ABMCClickManager {
     NSInteger _clickCount;
     dispatch_source_t _timer;
@@ -18,7 +20,6 @@
 - (instancetype)init {
     if (self = [super init]) {
         _clickCount = 0;
-        _clickTimeout = 1.5;
         _queue = dispatch_queue_create("com.huynguyen.abmc.clickqueue", DISPATCH_QUEUE_SERIAL);
     }
     return self;
@@ -50,7 +51,7 @@
 
 - (void)_startTimer {
     _timer = dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER, 0, 0, _queue);
-    uint64_t timeout = (uint64_t)(self.clickTimeout * NSEC_PER_SEC);
+    uint64_t timeout = kABMCClickWindow;
     dispatch_source_set_timer(_timer, dispatch_time(DISPATCH_TIME_NOW, timeout), DISPATCH_TIME_FOREVER, 0);
     dispatch_source_set_event_handler(_timer, ^{
         NSInteger count = self->_clickCount;

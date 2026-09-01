@@ -8,18 +8,15 @@
 typedef struct { NSString *actionID; NSString *title; } ABMCAction;
 
 static const ABMCAction kBuiltInActions[] = {
-    { @"default",    @"默认" },
-    { @"flashlight", @"手电" },
-    { @"camera",     @"相机" },
-    { @"silent",      @"静音" },
-    { @"screenshot", @"截屏" },
-    { @"lock",       @"锁屏" },
-    { @"respring",   @"重启" },
+    { @"default", @"默认" }, { @"flashlight", @"手电" },
+    { @"camera", @"相机" }, { @"silent", @"静音" },
+    { @"screenshot", @"截屏" }, { @"lock", @"锁屏" },
+    { @"respring", @"重启" }, { @"vpn", @"VPN" },
     { @"url:weixin://scanqrcode", @"微扫" },
     { @"url:weixin://widget/pay", @"微付" },
     { @"url:alipay://platformapi/startapp?appId=10000007", @"支扫" },
     { @"url:alipay://platformapi/startapp?appId=20000056", @"支付" },
-    { @"none",       @"关闭" },
+    { @"none", @"关闭" },
 };
 
 @implementation ABMCActionListController { NSString *_prefKey; NSString *_currentValue; }
@@ -46,7 +43,7 @@ static const ABMCAction kBuiltInActions[] = {
             [specs addObject:spec];
         }
         PSSpecifier *custom = [PSSpecifier groupSpecifierWithName:@"自设"];
-        [custom setProperty:@"可按 App 的 Bundle ID、快捷指令名称或 URL / URL Scheme 执行操作。" forKey:@"footerText"];
+        [custom setProperty:@"应用、指令或网址。" forKey:@"footerText"];
         [specs addObject:custom];
         NSArray *items = @[@[@"应用…", @"customApp"], @[@"指令…", @"customShortcut"], @[@"网址…", @"customURL"]];
         for (NSArray *item in items) {
@@ -66,16 +63,16 @@ static const ABMCAction kBuiltInActions[] = {
     BOOL selected = actionID && ((![actionID hasPrefix:@"custom"] && [_currentValue isEqualToString:actionID]) ||
         ([actionID isEqualToString:@"customApp"] && [_currentValue hasPrefix:@"app:"]) ||
         ([actionID isEqualToString:@"customShortcut"] && [_currentValue hasPrefix:@"shortcut:"]) ||
-        ([actionID isEqualToString:@"customURL"] && [_currentValue hasPrefix:@"url:"]));
+        ([actionID isEqualToString:@"customURL"] && [_currentValue hasPrefix:@"customURL:"]));
     cell.accessoryType = selected ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryNone;
     return cell;
 }
 
 - (void)selectAction:(PSSpecifier *)specifier {
     NSString *actionID = [specifier propertyForKey:@"actionID"];
-    if ([actionID isEqualToString:@"customApp"]) [self promptForValueWithTitle:@"打开 App" message:@"请输入 App Bundle ID（例如 com.apple.Music）：" prefix:@"app:" keyboard:UIKeyboardTypeDefault];
-    else if ([actionID isEqualToString:@"customShortcut"]) [self promptForValueWithTitle:@"运行快捷指令" message:@"请输入 Siri 快捷指令名称：" prefix:@"shortcut:" keyboard:UIKeyboardTypeDefault];
-    else if ([actionID isEqualToString:@"customURL"]) [self promptForValueWithTitle:@"打开 URL" message:@"请输入 URL 或 URL Scheme：" prefix:@"url:" keyboard:UIKeyboardTypeURL];
+    if ([actionID isEqualToString:@"customApp"]) [self promptForValueWithTitle:@"应用" message:@"请输入 App Bundle ID：" prefix:@"app:" keyboard:UIKeyboardTypeDefault];
+    else if ([actionID isEqualToString:@"customShortcut"]) [self promptForValueWithTitle:@"指令" message:@"请输入快捷指令名称：" prefix:@"shortcut:" keyboard:UIKeyboardTypeDefault];
+    else if ([actionID isEqualToString:@"customURL"]) [self promptForValueWithTitle:@"网址" message:@"请输入 URL 或 Scheme：" prefix:@"customURL:" keyboard:UIKeyboardTypeURL];
     else [self saveAction:actionID];
 }
 
@@ -91,7 +88,7 @@ static const ABMCAction kBuiltInActions[] = {
     [alert addAction:[UIAlertAction actionWithTitle:@"保存" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
         NSString *value = [alert.textFields.firstObject.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
         if (!value.length) return;
-        if ([prefix isEqualToString:@"url:"]) {
+        if ([prefix isEqualToString:@"customURL:"]) {
             NSURL *url = [NSURL URLWithString:value];
             if (!url || !url.scheme.length) { [self showInvalidURL]; return; }
         }
@@ -101,7 +98,7 @@ static const ABMCAction kBuiltInActions[] = {
 }
 
 - (void)showInvalidURL {
-    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"URL 无效" message:@"请输入包含有效 URL Scheme 的地址。" preferredStyle:UIAlertControllerStyleAlert];
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"无效" message:@"请输入有效的网址。" preferredStyle:UIAlertControllerStyleAlert];
     [alert addAction:[UIAlertAction actionWithTitle:@"确定" style:UIAlertActionStyleDefault handler:nil]];
     [self presentViewController:alert animated:YES completion:nil];
 }

@@ -3,6 +3,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <dlfcn.h>
 
 #define PREFS_DOMAIN CFSTR("com.huynguyen.actionbuttonmulticlick")
 
@@ -10,6 +11,7 @@ BOOL ABMCPerformingDefaultAction = NO;
 
 @interface ABMCActionExecutor ()
 - (void)openURLString:(NSString *)urlString;
+- (void)toggleVPN;
 @end
 
 @implementation ABMCActionExecutor {
@@ -82,14 +84,16 @@ BOOL ABMCPerformingDefaultAction = NO;
         [self takeScreenshot];
     } else if ([actionID isEqualToString:@"lock"]) {
         [self lockDevice];
-    } else if ([actionID isEqualToString:@"respring"]) {
-        [self respring];
+    } else if ([actionID isEqualToString:@"vpn"]) {
+        [self toggleVPN];
     } else if ([actionID hasPrefix:@"app:"]) {
         [self openApp:[actionID substringFromIndex:4]];
     } else if ([actionID hasPrefix:@"shortcut:"]) {
         [self runShortcut:[actionID substringFromIndex:9]];
     } else if ([actionID hasPrefix:@"url:"]) {
         [self openURLString:[actionID substringFromIndex:4]];
+    } else if ([actionID hasPrefix:@"customURL:"]) {
+        [self openURLString:[actionID substringFromIndex:10]];
     }
 }
 
@@ -292,6 +296,28 @@ BOOL ABMCPerformingDefaultAction = NO;
             }
         });
     } @catch (NSException *e) {}
+}
+
+- (void)toggleVPN {
+    @try {
+        // VPNConnectionStore lives in the system VPN Preferences bundle, not SpringBoard.
+        dlopen("/System/Library/PreferenceBundles/VPNPreferences.bundle/VPNPreferences", RTLD_LAZY);
+        Class storeClass = NSClassFromString(@"VPNConnectionStore");
+        SEL sharedSel = NSSelectorFromString(@"sharedInstance");
+        id store = [storeClass respondsToSelector:sharedSel] ? ((id (*)(id, SEL))objc_msgSend)(storeClass, sharedSel) : nil;
+        SEL currentSel = NSSelectorFromString(@"currentConnection");
+        id connection = (store && [store respondsToSelector:currentSel]) ? ((id (*)(id, SEL))objc_msgSend)(store, currentSel) : nil;
+        if (!connection) return;
+
+        SEL connectedSel = NSSelectorFromString(@"connected");
+        BOOL connected = [connection respondsToSelector:connectedSel] && ((BOOL (*)(id, SEL))objc_msgSend)(connection, connectedSel);
+        SEL actionSel = NSSelectorFromString(connected ? @"disconnect" : @"connect");
+        if ([connection respondsToSelector:actionSel]) {
+            ((void (*)(id, SEL))objc_msgSend)(connection, actionSel);
+        }
+    } @catch (NSException *exception) {
+        // No configured VPN or an unavailable system API safely does nothing.
+    }
 }
 
 #pragma mark - Open URL
