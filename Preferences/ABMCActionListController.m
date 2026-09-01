@@ -53,7 +53,16 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target) {
 }
 
 - (instancetype)initWithSpecifier:(PSSpecifier *)specifier {
-    self = [super initWithSpecifier:specifier];
+    self = [super init];
+    if (self) {
+        _prefKey = [[specifier propertyForKey:@"key"] copy];
+        _category = [[specifier propertyForKey:@"category"] copy];
+        NSString *fallback = [specifier propertyForKey:@"default"] ?: @"none";
+        CFPreferencesAppSynchronize((__bridge CFStringRef)PREFS_DOMAIN);
+        CFStringRef value = (CFStringRef)CFPreferencesCopyAppValue((__bridge CFStringRef)_prefKey, (__bridge CFStringRef)PREFS_DOMAIN);
+        _currentValue = value ? (__bridge_transfer NSString *)value : fallback;
+        self.title = _category.length ? [self categoryTitle] : @"选择动作";
+    }
     return self;
 }
 
