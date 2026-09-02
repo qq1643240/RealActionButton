@@ -47,12 +47,6 @@ static void ABMCLoadShortcutsRuntime(void) {
     for (NSString *path in @[@"/System/Library/PrivateFrameworks/IntentsCore.framework/IntentsCore", @"/System/Library/PrivateFrameworks/WorkflowKit.framework/WorkflowKit", @"/System/Library/PrivateFrameworks/WorkflowUI.framework/WorkflowUI", @"/Applications/Shortcuts.app/Shortcuts", @"/Applications/Shortcuts.app/Frameworks/WorkflowKit.framework/WorkflowKit", @"/Applications/Shortcuts.app/Frameworks/WorkflowUI.framework/WorkflowUI"]) dlopen(path.UTF8String, RTLD_LAZY | RTLD_LOCAL);
 }
 
-static NSString *ABMCLocalizedShortcutTitle(NSString *title, NSString *path) {
-    if (!title.length || !path.length) return title;
-    NSBundle *bundle = [NSBundle bundleWithPath:path];
-    NSString *localized = [bundle localizedStringForKey:title value:title table:@"InfoPlist"];
-    return localized.length ? localized : title;
-}
 static NSMutableDictionary *ABMCAppIconCache(void) {
     static NSMutableDictionary *cache;
     static dispatch_once_t onceToken;
