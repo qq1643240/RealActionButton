@@ -462,7 +462,18 @@ BOOL ABMCPerformingDefaultAction = NO;
         id workflow = nil;
         for (NSString *selectorName in @[@"workflowWithName:", @"workflowNamed:", @"workflowForName:"]) { SEL selector=NSSelectorFromString(selectorName); if (database && [database respondsToSelector:selector]) { workflow=((id(*)(id,SEL,id))objc_msgSend)(database,selector,name); if (workflow) break; } }
         if (!workflow && database) for (NSString *selectorName in @[@"workflows", @"allWorkflows"]) { SEL selector=NSSelectorFromString(selectorName); id workflows=[database respondsToSelector:selector]?((id(*)(id,SEL))objc_msgSend)(database,selector):nil; for (id candidate in [workflows conformsToProtocol:@protocol(NSFastEnumeration)] ? workflows : @[]) { SEL nameSelector=NSSelectorFromString(@"name"); NSString *candidateName=[candidate respondsToSelector:nameSelector]?((id(*)(id,SEL))objc_msgSend)(candidate,nameSelector):nil; if ([candidateName isEqualToString:name]) { workflow=candidate; break; } } if (workflow) break; }
-        if (!workflow) { ABMCLog(@"Shortcut workflow not found name=%@", name); return; }
+        if (!workflow) {
+            for (NSString *className in @[@"WFWorkflowRunnerClient", @"WFWorkflowRunner", @"WFWorkflowExecutionService"]) {
+                Class runnerClass = NSClassFromString(className);
+                if (!runnerClass) continue;
+                NSMutableArray *targets = [NSMutableArray array];
+                for (NSString *factoryName in @[@"sharedInstance", @"sharedClient", @"defaultClient", @"defaultRunner"]) { SEL selector=NSSelectorFromString(factoryName); if ([runnerClass respondsToSelector:selector]) { id target=((id(*)(id,SEL))objc_msgSend)(runnerClass,selector); if (target) [targets addObject:target]; } }
+                id allocated = [[runnerClass alloc] init]; if (allocated) [targets addObject:allocated];
+                for (id target in targets) for (NSString *selectorName in @[@"runWorkflowWithName:", @"runShortcutWithName:", @"executeWorkflowNamed:", @"runWorkflowNamed:"]) { SEL selector=NSSelectorFromString(selectorName); if (![target respondsToSelector:selector]) continue; ((void(*)(id,SEL,id))objc_msgSend)(target,selector,name); ABMCLog(@"Shortcut runner name request name=%@ class=%@ selector=%@",name,className,selectorName); return; }
+            }
+            ABMCLog(@"Shortcut workflow not found and runner name interface unavailable name=%@", name);
+            return;
+        }
         for (NSString *className in @[@"WFWorkflowRunnerClient", @"WFWorkflowRunner", @"WFWorkflowExecutionService"]) {
             Class runnerClass = NSClassFromString(className);
             if (!runnerClass) continue;

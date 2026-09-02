@@ -82,6 +82,31 @@ static NSMutableDictionary *ABMCAppIconCache(void) {
     dispatch_once(&onceToken, ^{ cache = [NSMutableDictionary dictionary]; });
     return cache;
 }
+static NSArray *ABMCApplicationSnapshotCache;
+static NSTimeInterval ABMCApplicationSnapshotDate;
+static NSArray *ABMCApplicationSnapshot(void) {
+    if (ABMCApplicationSnapshotCache && [NSDate timeIntervalSinceReferenceDate] - ABMCApplicationSnapshotDate < 30.0) return ABMCApplicationSnapshotCache;
+    return nil;
+}
+static void ABMCSetApplicationSnapshot(NSArray *snapshot) {
+    ABMCApplicationSnapshotCache = [snapshot copy];
+    ABMCApplicationSnapshotDate = [NSDate timeIntervalSinceReferenceDate];
+}
+static UIImage *ABMCProxyIcon(id application) {
+    if (!application) return nil;
+    for (NSString *selectorName in @[@"applicationIconImage", @"iconImage", @"icon"]) {
+        SEL selector = NSSelectorFromString(selectorName);
+        id value = [application respondsToSelector:selector] ? ((id(*)(id,SEL))objc_msgSend)(application, selector) : nil;
+        if ([value isKindOfClass:[UIImage class]]) return value;
+        if ([value isKindOfClass:[NSData class]]) { UIImage *image = [UIImage imageWithData:value]; if (image) return image; }
+    }
+    for (NSNumber *variant in @[@2, @1, @0]) {
+        SEL selector = NSSelectorFromString(@"iconDataForVariant:");
+        id data = [application respondsToSelector:selector] ? ((id(*)(id,SEL,NSInteger))objc_msgSend)(application, selector, variant.integerValue) : nil;
+        if ([data isKindOfClass:[NSData class]]) { UIImage *image = [UIImage imageWithData:data]; if (image) return image; }
+    }
+    return nil;
+}
 static UIImage *ABMCIconFromSpringBoard(NSString *bundleID) {
     if (!bundleID.length) return nil;
     id cached = ABMCAppIconCache()[bundleID];
@@ -192,6 +217,8 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
 }
 
 - (NSArray *)userApplications {
+    NSArray *cached = ABMCApplicationSnapshot();
+    if (cached) return cached;
     @try {
         Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
         SEL defaultSelector = NSSelectorFromString(@"defaultWorkspace");
@@ -223,12 +250,14 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
             }
             [seen addObject:bundle];
             if (!name.length) name = bundle;
-            UIImage *icon = ABMCAppIcon(bundle);
+            UIImage *icon = ABMCProxyIcon(application) ?: ABMCAppIcon(bundle);
             if (icon) ABMCAppIconCache()[bundle] = icon;
             [result addObject:@{@"name":name,@"bundle":bundle,@"path":path,@"proxy":application}];
         }
-        ABMCLog(@"Loaded filtered LaunchServices applications count=%lu", (unsigned long)result.count);
-        return [result sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [a[@"name"] localizedCaseInsensitiveCompare:b[@"name"]]; }];
+        NSArray *sorted = [result sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [a[@"name"] localizedCaseInsensitiveCompare:b[@"name"]]; }];
+        ABMCSetApplicationSnapshot(sorted);
+        ABMCLog(@"Loaded filtered LaunchServices applications count=%lu", (unsigned long)sorted.count);
+        return sorted;
     } @catch (NSException *exception) {
         ABMCLog(@"LaunchServices application read failed exception=%@", exception.reason ?: @"unknown");
         return @[];
@@ -310,7 +339,7 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
         [specs addObject:[PSSpecifier groupSpecifierWithName:@"动作测试"]];
         [specs addObject:ABMCRow(@"立即测试当前动作", @"__test__", self, nil)];
         [specs addObject:[PSSpecifier groupSpecifierWithName:@"选择动作分组"]];
-        NSArray *categories = @[@[@"基础动作", @"category:basic", @"hand.tap.fill"], @[@"应用打开", @"category:apps", @"app.fill"], @[@"快捷方式", @"category:shortcuts", @"square.grid.2x2.fill"], @[@"快捷指令", @"category:commands", @"bolt.fill"]];
+        NSArray *categories = @[@[@"基础动作", @"category:basic", @"hand.tap"], @[@"应用打开", @"category:apps", @"hand.point.up.left.fill"], @[@"快捷方式", @"category:shortcuts", @"hand.tap.fill"], @[@"快捷指令", @"category:commands", @"hand.raised.fill"]];
         for (NSArray *item in categories) [specs addObject:ABMCRow(item[0], item[1], self, [UIImage systemImageNamed:item[2]])];
     } else if ([_category isEqualToString:@"basic"]) {
         [specs addObject:[PSSpecifier groupSpecifierWithName:@"基础动作"]];
