@@ -221,9 +221,6 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
                 id value = [application respondsToSelector:selector] ? ((id(*)(id,SEL))objc_msgSend)(application, selector) : nil;
                 if ([value isKindOfClass:[NSString class]] && [(NSString *)value length]) { name = value; break; }
             }
-            SEL urlSelector = NSSelectorFromString(@"bundleURL");
-            id url = [application respondsToSelector:urlSelector] ? ((id(*)(id,SEL))objc_msgSend)(application, urlSelector) : nil;
-            if ([url respondsToSelector:@selector(path)]) path = [url path] ?: @"";
             [seen addObject:bundle];
             if (!name.length) name = bundle;
             UIImage *icon = ABMCAppIcon(bundle);
