@@ -15,6 +15,24 @@ static CFPropertyListRef ABMCReadPreference(CFStringRef key) {
     return CFPreferencesCopyValue(key, PREFS_DOMAIN, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
 }
 
+static void ABMCLoadShortcutsRuntime(void) {
+    for (NSString *path in @[@"/System/Library/PrivateFrameworks/WorkflowKit.framework/WorkflowKit", @"/System/Library/PrivateFrameworks/WorkflowUI.framework/WorkflowUI", @"/Applications/Shortcuts.app/Shortcuts"]) dlopen(path.UTF8String, RTLD_LAZY | RTLD_LOCAL);
+    @try {
+        Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
+        SEL defaultSelector = NSSelectorFromString(@"defaultWorkspace");
+        id workspace = workspaceClass && [workspaceClass respondsToSelector:defaultSelector] ? ((id(*)(id,SEL))objc_msgSend)(workspaceClass, defaultSelector) : nil;
+        SEL proxySelector = NSSelectorFromString(@"applicationForBundleIdentifier:");
+        id shortcutProxy = workspace && [workspace respondsToSelector:proxySelector] ? ((id(*)(id,SEL,id))objc_msgSend)(workspace, proxySelector, @"com.apple.shortcuts") : nil;
+        SEL bundleURLSelector = NSSelectorFromString(@"bundleURL");
+        id bundleURL = shortcutProxy && [shortcutProxy respondsToSelector:bundleURLSelector] ? ((id(*)(id,SEL))objc_msgSend)(shortcutProxy, bundleURLSelector) : nil;
+        NSString *bundlePath = [bundleURL respondsToSelector:@selector(path)] ? [bundleURL path] : nil;
+        for (NSString *relative in @[@"Shortcuts", @"Frameworks/WorkflowKit.framework/WorkflowKit", @"Frameworks/WorkflowUI.framework/WorkflowUI"]) {
+            NSString *path = bundlePath.length ? [bundlePath stringByAppendingPathComponent:relative] : nil;
+            if (path.length) dlopen(path.UTF8String, RTLD_LAZY | RTLD_LOCAL);
+        }
+    } @catch (__unused NSException *exception) {}
+}
+
 BOOL ABMCPerformingDefaultAction = NO;
 
 @interface ABMCActionExecutor ()
@@ -427,26 +445,30 @@ BOOL ABMCPerformingDefaultAction = NO;
     NSString *title = parts.count > 2 ? parts[2] : type;
     if (!bundleID.length || !type.length) return;
     @try {
-        Class controllerClass = NSClassFromString(@"SBApplicationController");
-        id controller = controllerClass && [controllerClass respondsToSelector:NSSelectorFromString(@"sharedInstance")] ? ((id(*)(id,SEL))objc_msgSend)(controllerClass, NSSelectorFromString(@"sharedInstance")) : nil;
-        id application = nil;
-        for (NSString *selectorName in @[@"applicationWithBundleIdentifier:", @"applicationWithDisplayIdentifier:"]) {
-            SEL selector = NSSelectorFromString(selectorName);
-            if (controller && [controller respondsToSelector:selector]) { application = ((id(*)(id,SEL,id))objc_msgSend)(controller, selector, bundleID); if (application) break; }
-        }
-        Class itemClass = NSClassFromString(@"SBSApplicationShortcutItem");
         id item = nil;
-        SEL initSelector = NSSelectorFromString(@"initWithType:localizedTitle:localizedSubtitle:icon:userInfo:");
-        if (itemClass && [itemClass instancesRespondToSelector:initSelector]) item = ((id(*)(id,SEL,id,id,id,id,id))objc_msgSend)([itemClass alloc], initSelector, type, title, nil, nil, nil);
-        for (id target in @[application ?: NSNull.null, controller ?: NSNull.null]) for (NSString *selectorName in @[@"activateShortcutItem:", @"activateApplicationShortcutItem:", @"performShortcutItem:"]) {
-            SEL selector = NSSelectorFromString(selectorName);
-            if (target != NSNull.null && item && [target respondsToSelector:selector]) { ((void(*)(id,SEL,id))objc_msgSend)(target, selector, item); ABMCLog(@"App shortcut activated bundle=%@ type=%@ selector=%@", bundleID, type, selectorName); return; }
+        Class itemClass = NSClassFromString(@"UIApplicationShortcutItem");
+        SEL initializer = NSSelectorFromString(@"initWithType:localizedTitle:localizedSubtitle:icon:userInfo:");
+        if (itemClass && [itemClass instancesRespondToSelector:initializer]) item = ((id(*)(id,SEL,id,id,id,id,id))objc_msgSend)([itemClass alloc], initializer, type, title, nil, nil, nil);
+        Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
+        id workspace = workspaceClass && [workspaceClass respondsToSelector:NSSelectorFromString(@"defaultWorkspace")] ? ((id(*)(id,SEL))objc_msgSend)(workspaceClass, NSSelectorFromString(@"defaultWorkspace")) : nil;
+        Class configClass = NSClassFromString(@"LSApplicationOpenConfiguration");
+        id configuration = configClass ? [[configClass alloc] init] : nil;
+        SEL setOptions = NSSelectorFromString(@"setFrontBoardOptions:");
+        if (configuration && item && [configuration respondsToSelector:setOptions]) ((void(*)(id,SEL,id))objc_msgSend)(configuration, setOptions, @{ @"UIApplicationLaunchOptionsShortcutItemKey": item, @"_UIApplicationShortcutItem": item });
+        SEL configuredOpen = NSSelectorFromString(@"openApplicationWithBundleID:configuration:completionHandler:");
+        if (workspace && configuration && [workspace respondsToSelector:configuredOpen]) {
+            ((void(*)(id,SEL,id,id,id))objc_msgSend)(workspace, configuredOpen, bundleID, configuration, nil);
+            ABMCLog(@"App shortcut launched through LS configuration bundle=%@ type=%@", bundleID, type);
+            return;
         }
         Class storeClass = NSClassFromString(@"SBApplicationShortcutStore");
         id store = storeClass && [storeClass respondsToSelector:NSSelectorFromString(@"sharedInstance")] ? ((id(*)(id,SEL))objc_msgSend)(storeClass, NSSelectorFromString(@"sharedInstance")) : nil;
-        for (NSString *selectorName in @[@"activateShortcutItem:forApplication:", @"activateShortcutItem:forBundleIdentifier:"]) { SEL selector=NSSelectorFromString(selectorName); if (store && item && [store respondsToSelector:selector]) { ((void(*)(id,SEL,id,id))objc_msgSend)(store,selector,item,[selectorName hasSuffix:@"Application:"] ? application : bundleID); ABMCLog(@"App shortcut store activated bundle=%@ type=%@",bundleID,type); return; } }
-    } @catch (NSException *exception) { ABMCLog(@"App shortcut activation failed bundle=%@ type=%@ exception=%@", bundleID, type, exception.reason ?: @"unknown"); }
-    ABMCLog(@"App shortcut unavailable; opening application bundle=%@ type=%@", bundleID, type);
+        for (NSString *selectorName in @[@"activateShortcutItem:forBundleIdentifier:", @"executeShortcutItem:forBundleIdentifier:", @"performShortcutItem:forBundleIdentifier:"]) {
+            SEL selector = NSSelectorFromString(selectorName);
+            if (store && item && [store respondsToSelector:selector]) { ((void(*)(id,SEL,id,id))objc_msgSend)(store, selector, item, bundleID); ABMCLog(@"App shortcut store request bundle=%@ type=%@ selector=%@", bundleID, type, selectorName); return; }
+        }
+    } @catch (NSException *exception) { ABMCLog(@"App shortcut launch failed bundle=%@ type=%@ exception=%@", bundleID, type, exception.reason ?: @"unknown"); }
+    ABMCLog(@"App shortcut launch configuration unavailable; opening application bundle=%@ type=%@", bundleID, type);
     [self openApp:bundleID];
 }
 
@@ -455,7 +477,7 @@ BOOL ABMCPerformingDefaultAction = NO;
 - (void)runShortcut:(NSString *)name {
     if (!name.length) return;
     @try {
-        dlopen("/System/Library/PrivateFrameworks/WorkflowKit.framework/WorkflowKit", RTLD_LAZY | RTLD_LOCAL);
+        ABMCLoadShortcutsRuntime();
         Class databaseClass = NSClassFromString(@"WFWorkflowDatabase");
         id database = nil;
         for (NSString *factoryName in @[@"defaultDatabase", @"sharedDatabase", @"database"]) { SEL selector=NSSelectorFromString(factoryName); if (databaseClass && [databaseClass respondsToSelector:selector]) { database=((id(*)(id,SEL))objc_msgSend)(databaseClass,selector); if (database) break; } }
