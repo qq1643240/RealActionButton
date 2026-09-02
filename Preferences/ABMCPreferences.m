@@ -1,14 +1,8 @@
 #import "ABMCPreferences.h"
 #import <Preferences/PSSpecifier.h>
 #import <UIKit/UIKit.h>
-#import <SpringBoardServices/SpringBoardServices.h>
-#import <dlfcn.h>
 
 #define PREFS_DOMAIN @"com.huynguyen.actionbuttonmulticlick"
-
-typedef CFDataRef (*ABMPreferencesIconFunction)(CFStringRef);
-static void *ABMCPreferencesServicesHandle(void) { static void *handle; static dispatch_once_t once; dispatch_once(&once, ^{ handle = dlopen("/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices", RTLD_LAZY | RTLD_LOCAL); }); return handle ?: RTLD_DEFAULT; }
-static CFDataRef ABMCPreferencesCopyIconData(CFStringRef identifier) { static ABMPreferencesIconFunction function; static dispatch_once_t once; dispatch_once(&once, ^{ function=(ABMPreferencesIconFunction)dlsym(ABMCPreferencesServicesHandle(), "SBSCopyIconImagePNGDataForDisplayIdentifier"); }); return function ? function(identifier) : NULL; }
 
 static NSString *titleForActionID(NSString *actionID) {
     if (!actionID || [actionID isEqualToString:@"none"]) return @"无操作";
@@ -23,47 +17,11 @@ static NSString *titleForActionID(NSString *actionID) {
     if ([actionID hasPrefix:@"app:"]) return meta[@"appName"] ?: [actionID substringFromIndex:4];
     if ([actionID hasPrefix:@"shortcut:"]) return [actionID substringFromIndex:9];
     if ([actionID hasPrefix:@"appshortcut:"]) { NSArray *parts=[[actionID substringFromIndex:12] componentsSeparatedByString:@"|"]; return parts.count>2 ? parts[2] : @"快捷方式"; }
-    if ([actionID hasPrefix:@"customURL:"]) {
-        NSString *url=[actionID substringFromIndex:10];
-        for (NSString *key in @[@"customLinks", @"presetLinks"]) {
-            CFPropertyListRef raw=CFPreferencesCopyValue((__bridge CFStringRef)key,(__bridge CFStringRef)PREFS_DOMAIN,kCFPreferencesCurrentUser,kCFPreferencesAnyHost);
-            NSArray *items=raw?(__bridge_transfer NSArray *)raw:@[];
-            for (id object in [items isKindOfClass:[NSArray class]] ? items : @[]) {
-                if (![object isKindOfClass:[NSDictionary class]]) continue;
-                NSDictionary *item=object;
-                if ([item[@"url"] isEqual:url] && [item[@"title"] length]) return item[@"title"];
-            }
-        }
-        return @"自定义链接";
-    }
     return actionID.length ? actionID : @"无操作";
 }
 
-static UIImage *iconForActionID(NSString *actionID) {
-    CFPropertyListRef rawMeta = CFPreferencesCopyValue(CFSTR("actionMetadata"), (__bridge CFStringRef)PREFS_DOMAIN, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-    NSDictionary *allMeta = rawMeta ? (__bridge_transfer NSDictionary *)rawMeta : @{};
-    NSDictionary *meta = [allMeta isKindOfClass:[NSDictionary class]] ? allMeta[actionID] : nil;
-    NSString *customIcon = [meta[@"icon"] isKindOfClass:[NSString class]] ? meta[@"icon"] : nil;
-    if ([customIcon containsString:@"."]) {
-        CFDataRef rawIcon = ABMCPreferencesCopyIconData((__bridge CFStringRef)customIcon);
-        UIImage *image = rawIcon ? [UIImage imageWithData:(__bridge NSData *)rawIcon] : nil;
-        if (rawIcon) CFRelease(rawIcon);
-        if (image) return image;
-    }
-    if (customIcon.length) { UIImage *symbol = [UIImage systemImageNamed:customIcon]; if (symbol) return symbol; }
-    NSString *bundleID = nil;
-    if ([actionID hasPrefix:@"app:"]) bundleID = [actionID substringFromIndex:4];
-    else if ([actionID hasPrefix:@"appshortcut:"]) bundleID = [[[actionID substringFromIndex:12] componentsSeparatedByString:@"|"] firstObject];
-    if (bundleID.length) {
-        CFDataRef rawIcon = ABMCPreferencesCopyIconData((__bridge CFStringRef)bundleID);
-        UIImage *image = rawIcon ? [UIImage imageWithData:(__bridge NSData *)rawIcon] : nil;
-        if (rawIcon) CFRelease(rawIcon);
-        if (image) return image;
-    }
-    if ([actionID hasPrefix:@"shortcut:"]) return [UIImage systemImageNamed:@"bolt.circle.fill"];
-    if ([actionID hasPrefix:@"url:"] || [actionID hasPrefix:@"customURL:"]) return [UIImage systemImageNamed:@"safari.fill"];
-    NSDictionary *symbols = @{@"default":@"hand.tap.fill", @"flashlight":@"flashlight.on.fill", @"camera":@"camera.fill", @"silent":@"speaker.slash.fill", @"screenshot":@"camera.viewfinder", @"lock":@"lock.fill", @"respring":@"arrow.clockwise", @"url:weixin://scanqrcode":@"qrcode.viewfinder", @"url:weixin://widget/pay":@"creditcard.fill", @"url:alipay://platformapi/startapp?appId=10000007":@"qrcode.viewfinder", @"url:alipay://platformapi/startapp?appId=20000056":@"creditcard.fill", @"none":@"nosign"};
-    return [UIImage systemImageNamed:symbols[actionID] ?: @"bolt.fill"];
+static UIImage *iconForActionID(__unused NSString *actionID) {
+    return [UIImage systemImageNamed:@"hand.tap"];
 }
 
 @implementation ABMCPreferences

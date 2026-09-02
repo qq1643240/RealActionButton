@@ -19,7 +19,6 @@ BOOL ABMCPerformingDefaultAction = NO;
 
 @interface ABMCActionExecutor ()
 - (void)openURLString:(NSString *)urlString;
-- (void)openConfiguredURL:(NSString *)urlString;
 - (void)executeAppShortcut:(NSString *)payload;
 - (BOOL)invokeCandidates:(NSArray<NSString *> *)selectors classes:(NSArray<NSString *> *)classes argument:(id)argument;
 - (void)performNamedSystemAction:(NSString *)action;
@@ -129,8 +128,6 @@ BOOL ABMCPerformingDefaultAction = NO;
         [self runShortcut:[actionID substringFromIndex:9]];
     } else if ([actionID hasPrefix:@"url:"]) {
         [self openURLString:[actionID substringFromIndex:4]];
-    } else if ([actionID hasPrefix:@"customURL:"]) {
-        [self openURLString:[actionID substringFromIndex:10]];
     }
 }
 
@@ -422,50 +419,6 @@ BOOL ABMCPerformingDefaultAction = NO;
     });
 }
 
-- (void)openConfiguredURL:(NSString *)urlString {
-    if (!urlString.length) return;
-    NSString *clipboard = [UIPasteboard generalPasteboard].string ?: @"";
-    BOOL needsClipboardInput = [urlString containsString:@"$$$"] && !clipboard.length;
-    BOOL needsKeywordInput = [urlString containsString:@"@@@"];
-    if (!needsClipboardInput && !needsKeywordInput) {
-        NSString *resolved = [urlString stringByReplacingOccurrencesOfString:@"$$$" withString:clipboard];
-        [self openURLString:resolved];
-        return;
-    }
-
-    dispatch_async(dispatch_get_main_queue(), ^{
-        UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"网址" message:needsKeywordInput ? @"请输入关键词" : @"剪贴板为空，请输入内容" preferredStyle:UIAlertControllerStyleAlert];
-        [alert addTextFieldWithConfigurationHandler:^(UITextField *field) {
-            field.keyboardType = UIKeyboardTypeDefault;
-            field.autocapitalizationType = UITextAutocapitalizationTypeNone;
-            field.autocorrectionType = UITextAutocorrectionTypeNo;
-        }];
-        [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
-        [alert addAction:[UIAlertAction actionWithTitle:@"打开" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *action) {
-            NSString *value = alert.textFields.firstObject.text ?: @"";
-            if (!value.length) return;
-            NSString *resolved = [urlString stringByReplacingOccurrencesOfString:@"@@@" withString:value];
-            NSString *replacement = needsClipboardInput ? value : ([UIPasteboard generalPasteboard].string ?: @"");
-            resolved = [resolved stringByReplacingOccurrencesOfString:@"$$$" withString:replacement];
-            [self openURLString:resolved];
-        }]];
-        UIViewController *presenter = nil;
-        for (UIScene *scene in [UIApplication sharedApplication].connectedScenes) {
-            if (scene.activationState != UISceneActivationStateForegroundActive || ![scene isKindOfClass:[UIWindowScene class]]) continue;
-            for (UIWindow *window in ((UIWindowScene *)scene).windows) {
-                if (window.isKeyWindow) {
-                    presenter = window.rootViewController;
-                    break;
-                }
-            }
-            if (presenter) break;
-        }
-        if (!presenter) return;
-        while (presenter.presentedViewController) presenter = presenter.presentedViewController;
-        [presenter presentViewController:alert animated:YES completion:nil];
-    });
-}
-
 - (void)executeAppShortcut:(NSString *)payload {
     NSArray *parts = [payload componentsSeparatedByString:@"|"];
     if (parts.count < 2) return;
@@ -508,24 +461,25 @@ BOOL ABMCPerformingDefaultAction = NO;
         for (NSString *factoryName in @[@"defaultDatabase", @"sharedDatabase", @"database"]) { SEL selector=NSSelectorFromString(factoryName); if (databaseClass && [databaseClass respondsToSelector:selector]) { database=((id(*)(id,SEL))objc_msgSend)(databaseClass,selector); if (database) break; } }
         id workflow = nil;
         for (NSString *selectorName in @[@"workflowWithName:", @"workflowNamed:", @"workflowForName:"]) { SEL selector=NSSelectorFromString(selectorName); if (database && [database respondsToSelector:selector]) { workflow=((id(*)(id,SEL,id))objc_msgSend)(database,selector,name); if (workflow) break; } }
-        if (!workflow && database) {
-            for (NSString *selectorName in @[@"workflows", @"allWorkflows"]) { SEL selector=NSSelectorFromString(selectorName); id workflows=[database respondsToSelector:selector]?((id(*)(id,SEL))objc_msgSend)(database,selector):nil; for (id candidate in [workflows conformsToProtocol:@protocol(NSFastEnumeration)] ? workflows : @[]) { SEL nameSelector=NSSelectorFromString(@"name"); NSString *candidateName=[candidate respondsToSelector:nameSelector]?((id(*)(id,SEL))objc_msgSend)(candidate,nameSelector):nil; if ([candidateName isEqualToString:name]) { workflow=candidate; break; } } if (workflow) break; }
+        if (!workflow && database) for (NSString *selectorName in @[@"workflows", @"allWorkflows"]) { SEL selector=NSSelectorFromString(selectorName); id workflows=[database respondsToSelector:selector]?((id(*)(id,SEL))objc_msgSend)(database,selector):nil; for (id candidate in [workflows conformsToProtocol:@protocol(NSFastEnumeration)] ? workflows : @[]) { SEL nameSelector=NSSelectorFromString(@"name"); NSString *candidateName=[candidate respondsToSelector:nameSelector]?((id(*)(id,SEL))objc_msgSend)(candidate,nameSelector):nil; if ([candidateName isEqualToString:name]) { workflow=candidate; break; } } if (workflow) break; }
+        if (!workflow) { ABMCLog(@"Shortcut workflow not found name=%@", name); return; }
+        for (NSString *className in @[@"WFWorkflowRunnerClient", @"WFWorkflowRunner", @"WFWorkflowExecutionService"]) {
+            Class runnerClass = NSClassFromString(className);
+            if (!runnerClass) continue;
+            NSMutableArray *targets = [NSMutableArray array];
+            for (NSString *factoryName in @[@"sharedInstance", @"sharedClient", @"defaultClient", @"defaultRunner"]) { SEL selector=NSSelectorFromString(factoryName); if ([runnerClass respondsToSelector:selector]) { id target=((id(*)(id,SEL))objc_msgSend)(runnerClass,selector); if (target) [targets addObject:target]; } }
+            id allocated = [[runnerClass alloc] init]; if (allocated) [targets addObject:allocated];
+            for (id target in targets) for (NSString *selectorName in @[@"runWorkflow:withInput:completionHandler:", @"runWorkflow:withInput:source:completionHandler:", @"runWorkflow:withInput:", @"runWorkflow:", @"executeWorkflow:"]) {
+                SEL selector=NSSelectorFromString(selectorName); if (![target respondsToSelector:selector]) continue;
+                if ([selectorName isEqualToString:@"runWorkflow:withInput:completionHandler:"]) ((void(*)(id,SEL,id,id,id))objc_msgSend)(target,selector,workflow,nil,nil);
+                else if ([selectorName isEqualToString:@"runWorkflow:withInput:source:completionHandler:"]) ((void(*)(id,SEL,id,id,id,id))objc_msgSend)(target,selector,workflow,nil,nil,nil);
+                else if ([selectorName isEqualToString:@"runWorkflow:withInput:"]) ((void(*)(id,SEL,id,id))objc_msgSend)(target,selector,workflow,nil);
+                else ((void(*)(id,SEL,id))objc_msgSend)(target,selector,workflow);
+                ABMCLog(@"Shortcut runner requested name=%@ class=%@ selector=%@", name, className, selectorName); return;
+            }
         }
-        Class controllerClass = NSClassFromString(@"WFWorkflowController");
-        id controller = nil;
-        for (NSString *factoryName in @[@"sharedInstance", @"sharedController", @"defaultController"]) { SEL selector=NSSelectorFromString(factoryName); if (controllerClass && [controllerClass respondsToSelector:selector]) { controller=((id(*)(id,SEL))objc_msgSend)(controllerClass,selector); if (controller) break; } }
-        if (!controller && controllerClass) controller=[[controllerClass alloc] init];
-        for (NSString *selectorName in @[@"runWorkflow:withInput:source:", @"runWorkflow:withInput:", @"runWorkflow:"]) {
-            SEL selector=NSSelectorFromString(selectorName);
-            if (!workflow || !controller || ![controller respondsToSelector:selector]) continue;
-            if ([selectorName isEqualToString:@"runWorkflow:withInput:source:"]) ((void(*)(id,SEL,id,id,id))objc_msgSend)(controller,selector,workflow,nil,nil);
-            else if ([selectorName isEqualToString:@"runWorkflow:withInput:"]) ((void(*)(id,SEL,id,id))objc_msgSend)(controller,selector,workflow,nil);
-            else ((void(*)(id,SEL,id))objc_msgSend)(controller,selector,workflow);
-            ABMCLog(@"Shortcut native workflow run requested name=%@ selector=%@", name, selectorName);
-            return;
-        }
-        ABMCLog(@"Shortcut native workflow unavailable name=%@ workflow=%@ controller=%@", name, workflow ? @"yes" : @"no", controller ? @"yes" : @"no");
-    } @catch (NSException *exception) { ABMCLog(@"Shortcut native workflow failed name=%@ exception=%@", name, exception.reason ?: @"unknown"); }
+        ABMCLog(@"Shortcut runner unavailable name=%@", name);
+    } @catch (NSException *exception) { ABMCLog(@"Shortcut runner failed name=%@ exception=%@", name, exception.reason ?: @"unknown"); }
 }
 
 @end
