@@ -15,8 +15,6 @@ typedef CFArrayRef (*ABMDisplayIdentifiersFunction)(BOOL, BOOL);
 typedef CFStringRef (*ABMLocalizedNameFunction)(CFStringRef);
 typedef CFDataRef (*ABMIconDataFunction)(CFStringRef);
 static void *ABMCSpringBoardServicesHandle(void) { static void *handle; static dispatch_once_t once; dispatch_once(&once, ^{ handle = dlopen("/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices", RTLD_LAZY | RTLD_LOCAL); }); return handle ?: RTLD_DEFAULT; }
-static CFArrayRef ABMCopyDisplayIdentifiers(void) { static ABMDisplayIdentifiersFunction function; static dispatch_once_t once; dispatch_once(&once, ^{ function=(ABMDisplayIdentifiersFunction)dlsym(ABMCSpringBoardServicesHandle(), "SBSCopyApplicationDisplayIdentifiers"); }); return function ? function(YES, NO) : NULL; }
-static CFStringRef ABMCopyLocalizedName(CFStringRef identifier) { static ABMLocalizedNameFunction function; static dispatch_once_t once; dispatch_once(&once, ^{ function=(ABMLocalizedNameFunction)dlsym(ABMCSpringBoardServicesHandle(), "SBSCopyLocalizedApplicationNameForDisplayIdentifier"); }); return function ? function(identifier) : NULL; }
 static CFDataRef ABMCopyIconData(CFStringRef identifier) { static ABMIconDataFunction function; static dispatch_once_t once; dispatch_once(&once, ^{ function=(ABMIconDataFunction)dlsym(ABMCSpringBoardServicesHandle(), "SBSCopyIconImagePNGDataForDisplayIdentifier"); }); return function ? function(identifier) : NULL; }
 
 static CFPropertyListRef ABMCRead(CFStringRef key) {
