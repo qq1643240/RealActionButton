@@ -5,7 +5,7 @@
 #define ABMCEditorNotice @"com.huynguyen.actionbuttonmulticlick/prefsChanged"
 
 static NSDictionary *ABMCEditorTitles(void) {
-    return @{@"default":@"系统默认",@"flashlight":@"手电筒",@"camera":@"相机",@"silent":@"静音模式",@"screenshot":@"屏幕截图",@"lock":@"锁定屏幕",@"respring":@"重启桌面",@"controlCenter":@"控制中心",@"notificationCenter":@"通知中心",@"spotlight":@"聚焦搜索",@"screenRecord":@"屏幕录制",@"mediaPlayPause":@"播放暂停",@"mediaPrevious":@"上一首歌",@"mediaNext":@"下一首歌",@"closeApps":@"关闭应用"};
+    return @{@"default":@"系统默认",@"flashlight":@"手电筒",@"camera":@"相机",@"silent":@"静音模式",@"screenshot":@"屏幕截图",@"lock":@"锁定屏幕",@"respring":@"重启桌面",@"controlCenter":@"控制中心",@"notificationCenter":@"通知中心",@"spotlight":@"聚焦搜索",@"screenRecord":@"屏幕录制",@"mediaPlayPause":@"播放暂停",@"mediaPrevious":@"上一首歌",@"mediaNext":@"下一首歌",@"closeApps":@"关闭应用",@"url:weixin://scanqrcode":@"微信扫一扫",@"url:weixin://widget/pay":@"微信付款码",@"url:alipay://platformapi/startapp?appId=10000007":@"支付宝扫一扫",@"url:alipay://platformapi/startapp?appId=20000056":@"支付宝付款码"};
 }
 
 @interface ABMCActionEditorController ()

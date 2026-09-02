@@ -17,6 +17,8 @@ BOOL ABMCPerformingDefaultAction = NO;
 - (void)openURLString:(NSString *)urlString;
 - (void)openConfiguredURL:(NSString *)urlString;
 - (void)executeAppShortcut:(NSString *)payload;
+- (BOOL)invokeCandidates:(NSArray<NSString *> *)selectors classes:(NSArray<NSString *> *)classes argument:(id)argument;
+- (void)performNamedSystemAction:(NSString *)action;
 - (void)invokeSystemAction:(NSString *)selectorName;
 - (void)invokeMediaSelector:(NSString *)selectorName;
 - (void)invokeMediaSelector:(NSString *)selectorName argument:(id)argument;
@@ -100,21 +102,21 @@ BOOL ABMCPerformingDefaultAction = NO;
     } else if ([actionID isEqualToString:@"respring"]) {
         [self respring];
     } else if ([actionID isEqualToString:@"controlCenter"]) {
-        [self invokeSystemAction:@"_showControlCenter"];
+        [self performNamedSystemAction:@"controlCenter"];
     } else if ([actionID isEqualToString:@"notificationCenter"]) {
-        [self invokeSystemAction:@"_showNotificationCenter"];
+        [self performNamedSystemAction:@"notificationCenter"];
     } else if ([actionID isEqualToString:@"spotlight"]) {
-        [self invokeSystemAction:@"_activateSpotlight"];
+        [self performNamedSystemAction:@"spotlight"];
     } else if ([actionID isEqualToString:@"screenRecord"]) {
-        [self invokeSystemAction:@"_toggleScreenRecording"];
+        [self performNamedSystemAction:@"screenRecord"];
     } else if ([actionID isEqualToString:@"mediaPlayPause"]) {
-        [self invokeMediaSelector:@"togglePlayPause"];
+        [self performNamedSystemAction:@"mediaPlayPause"];
     } else if ([actionID isEqualToString:@"mediaPrevious"]) {
-        [self invokeMediaSelector:@"changeTrack:" argument:@(-1)];
+        [self performNamedSystemAction:@"mediaPrevious"];
     } else if ([actionID isEqualToString:@"mediaNext"]) {
-        [self invokeMediaSelector:@"changeTrack:" argument:@(1)];
+        [self performNamedSystemAction:@"mediaNext"];
     } else if ([actionID isEqualToString:@"closeApps"]) {
-        [self invokeSystemAction:@"_dismissSwitcherIfNecessary"];
+        [self performNamedSystemAction:@"closeApps"];
     } else if ([actionID hasPrefix:@"app:"]) {
         [self openApp:[actionID substringFromIndex:4]];
     } else if ([actionID hasPrefix:@"appshortcut:"]) {
@@ -329,6 +331,45 @@ BOOL ABMCPerformingDefaultAction = NO;
     } @catch (NSException *e) {}
 }
 
+- (BOOL)invokeCandidates:(NSArray<NSString *> *)selectors classes:(NSArray<NSString *> *)classes argument:(id)argument {
+    for (NSString *className in classes) {
+        @try {
+            Class cls = NSClassFromString(className);
+            if (!cls) continue;
+            NSMutableArray *targets = [NSMutableArray arrayWithObject:cls];
+            for (NSString *factoryName in @[@"sharedInstance", @"sharedController", @"defaultInstance", @"defaultController"]) {
+                SEL factory = NSSelectorFromString(factoryName);
+                if ([cls respondsToSelector:factory]) {
+                    id target = ((id(*)(id,SEL))objc_msgSend)(cls, factory);
+                    if (target) [targets addObject:target];
+                }
+            }
+            for (id target in targets) for (NSString *name in selectors) {
+                SEL selector = NSSelectorFromString(name);
+                if (![target respondsToSelector:selector]) continue;
+                if ([name hasSuffix:@":"]) ((void(*)(id,SEL,id))objc_msgSend)(target, selector, argument);
+                else ((void(*)(id,SEL))objc_msgSend)(target, selector);
+                ABMCLog(@"System action invoked class=%@ selector=%@", className, name);
+                return YES;
+            }
+        } @catch (NSException *exception) { ABMCLog(@"System target failed class=%@ exception=%@", className, exception.reason ?: @"unknown"); }
+    }
+    return NO;
+}
+
+- (void)performNamedSystemAction:(NSString *)action {
+    BOOL ok = NO;
+    if ([action isEqualToString:@"controlCenter"]) ok = [self invokeCandidates:@[@"_showControlCenter", @"showControlCenter", @"_presentControlCenter"] classes:@[@"SBUIController", @"SBControlCenterController", @"CCUIOverlayStatusBarPresentationProvider"] argument:nil];
+    else if ([action isEqualToString:@"notificationCenter"]) ok = [self invokeCandidates:@[@"_showNotificationCenter", @"showNotificationCenter", @"_revealNotificationCenter"] classes:@[@"SBUIController", @"SBNotificationCenterController", @"SBCoverSheetPresentationManager"] argument:nil];
+    else if ([action isEqualToString:@"spotlight"]) ok = [self invokeCandidates:@[@"_activateSpotlight", @"activateSpotlight", @"_showSpotlight"] classes:@[@"SBUIController", @"SBSearchPresentationController", @"SBSpotlightController"] argument:nil];
+    else if ([action isEqualToString:@"screenRecord"]) ok = [self invokeCandidates:@[@"_toggleScreenRecording", @"toggleScreenRecording", @"_toggleRecording"] classes:@[@"SBUIController", @"RPControlCenterModule", @"CCUIRecordingModule"] argument:nil];
+    else if ([action isEqualToString:@"mediaPlayPause"]) ok = [self invokeCandidates:@[@"togglePlayPause", @"_togglePlayPause"] classes:@[@"SBMediaController", @"MPUNowPlayingController"] argument:nil];
+    else if ([action isEqualToString:@"mediaPrevious"]) ok = [self invokeCandidates:@[@"changeTrack:", @"_changeTrack:"] classes:@[@"SBMediaController", @"MPUNowPlayingController"] argument:@(-1)];
+    else if ([action isEqualToString:@"mediaNext"]) ok = [self invokeCandidates:@[@"changeTrack:", @"_changeTrack:"] classes:@[@"SBMediaController", @"MPUNowPlayingController"] argument:@(1)];
+    else if ([action isEqualToString:@"closeApps"]) ok = [self invokeCandidates:@[@"_dismissSwitcherIfNecessary", @"dismissSwitcher", @"_dismissAppSwitcher"] classes:@[@"SBUIController", @"SBMainSwitcherViewController"] argument:nil];
+    ABMCLog(@"System action result action=%@ success=%@", action, ok ? @"yes" : @"no");
+}
+
 - (void)invokeSystemAction:(NSString *)selectorName {
     if (!selectorName.length) return;
     @try {
@@ -382,7 +423,10 @@ BOOL ABMCPerformingDefaultAction = NO;
 
 - (void)openConfiguredURL:(NSString *)urlString {
     if (!urlString.length) return;
-
+    CFPropertyListRef rawLinks = ABMCReadPreference(CFSTR("customLinks"));
+    NSArray *links = rawLinks ? (__bridge_transfer NSArray *)rawLinks : @[];
+    NSDictionary *configuration = nil;
+    for (NSDictionary *entry in [links isKindOfClass:[NSArray class]] ? links : @[]) if ([entry[@"url"] isEqual:urlString]) { configuration = entry; break; }
     NSString *clipboard = [UIPasteboard generalPasteboard].string ?: @"";
     BOOL needsClipboardInput = [urlString containsString:@"$$$"] && !clipboard.length;
     BOOL needsKeywordInput = [urlString containsString:@"@@@"];

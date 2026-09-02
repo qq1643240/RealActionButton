@@ -46,10 +46,14 @@
 - (void)save {
     NSString *title=[self.titleField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]; NSString *url=[self.urlField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]]; NSString *icon=[self.iconField.text stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
     NSURL *parsed=[NSURL URLWithString:url]; if (!title.length || !url.length || !parsed.scheme.length) { UIAlertController *alert=[UIAlertController alertControllerWithTitle:@"无法存储" message:@"请填写标题和有效链接。" preferredStyle:UIAlertControllerStyleAlert]; [alert addAction:[UIAlertAction actionWithTitle:@"好" style:UIAlertActionStyleDefault handler:nil]]; [self presentViewController:alert animated:YES completion:nil]; return; }
-    CFPropertyListRef raw=CFPreferencesCopyValue(CFSTR("customLinks"),(__bridge CFStringRef)ABMCLinkDomain,kCFPreferencesCurrentUser,kCFPreferencesAnyHost); NSArray *saved=raw?(__bridge_transfer NSArray *)raw:@[]; NSMutableArray *result=[NSMutableArray array];
+    BOOL presetMode = [self.key isEqualToString:@"presetLinks"];
+    CFStringRef storageKey = presetMode ? CFSTR("presetLinks") : CFSTR("customLinks");
+    CFPropertyListRef raw=CFPreferencesCopyValue(storageKey,(__bridge CFStringRef)ABMCLinkDomain,kCFPreferencesCurrentUser,kCFPreferencesAnyHost); NSArray *saved=raw?(__bridge_transfer NSArray *)raw:@[]; NSMutableArray *result=[NSMutableArray array];
     for (NSDictionary *item in [saved isKindOfClass:[NSArray class]]?saved:@[]) if (![item[@"url"] isEqual:_oldURL]) [result addObject:item];
     [result addObject:@{@"title":title,@"icon":icon?:@"",@"url":url,@"browser":@(self.browserSwitch.on)}];
-    CFPreferencesSetValue(CFSTR("customLinks"),(__bridge CFPropertyListRef)result,(__bridge CFStringRef)ABMCLinkDomain,kCFPreferencesCurrentUser,kCFPreferencesAnyHost); CFPreferencesSetValue((__bridge CFStringRef)self.key,(__bridge CFPropertyListRef)[@"customURL:" stringByAppendingString:url],(__bridge CFStringRef)ABMCLinkDomain,kCFPreferencesCurrentUser,kCFPreferencesAnyHost); CFPreferencesSynchronize((__bridge CFStringRef)ABMCLinkDomain,kCFPreferencesCurrentUser,kCFPreferencesAnyHost);
-    ABMCLog(@"Link editor saved key=%@ title=%@ url=%@ browser=%@",self.key,title,url,self.browserSwitch.on?@"on":@"off"); CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),(__bridge CFStringRef)ABMCLinkNotice,NULL,NULL,YES); [self.navigationController popViewControllerAnimated:YES];
+    CFPreferencesSetValue(storageKey,(__bridge CFPropertyListRef)result,(__bridge CFStringRef)ABMCLinkDomain,kCFPreferencesCurrentUser,kCFPreferencesAnyHost);
+    if (!presetMode) CFPreferencesSetValue((__bridge CFStringRef)self.key,(__bridge CFPropertyListRef)[@"customURL:" stringByAppendingString:url],(__bridge CFStringRef)ABMCLinkDomain,kCFPreferencesCurrentUser,kCFPreferencesAnyHost);
+    CFPreferencesSynchronize((__bridge CFStringRef)ABMCLinkDomain,kCFPreferencesCurrentUser,kCFPreferencesAnyHost);
+    ABMCLog(@"Link editor saved mode=%@ key=%@ title=%@ url=%@ browser=%@",presetMode?@"preset":@"custom",self.key,title,url,self.browserSwitch.on?@"on":@"off"); CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),(__bridge CFStringRef)ABMCLinkNotice,NULL,NULL,YES); [self.navigationController popViewControllerAnimated:YES];
 }
 @end
