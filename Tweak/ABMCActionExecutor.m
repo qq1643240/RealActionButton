@@ -7,6 +7,8 @@
 #import <dlfcn.h>
 #import "../ABMCLogger.h"
 
+typedef void (*ABMCSBSLaunchFunction)(CFStringRef, BOOL);
+
 #define PREFS_DOMAIN CFSTR("com.huynguyen.actionbuttonmulticlick")
 
 static CFPropertyListRef ABMCReadPreference(CFStringRef key) {
@@ -308,7 +310,9 @@ BOOL ABMCPerformingDefaultAction = NO;
 - (void)openApp:(NSString *)bundleID {
     if (!bundleID.length) return;
     @try {
-        SBSLaunchApplicationWithIdentifier((__bridge CFStringRef)bundleID, false);
+        ABMCSBSLaunchFunction launch = (ABMCSBSLaunchFunction)dlsym(RTLD_DEFAULT, "SBSLaunchApplicationWithIdentifier");
+        if (!launch) { ABMCLog(@"SpringBoardServices launch symbol unavailable bundle=%@", bundleID); return; }
+        launch((__bridge CFStringRef)bundleID, false);
         ABMCLog(@"Application launched via SpringBoardServices bundle=%@", bundleID);
     } @catch (NSException *exception) {
         ABMCLog(@"SpringBoardServices launch failed bundle=%@ exception=%@", bundleID, exception.reason ?: @"unknown");
