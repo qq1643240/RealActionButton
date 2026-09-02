@@ -11,6 +11,14 @@
 #define PREFS_DOMAIN @"com.huynguyen.actionbuttonmulticlick"
 #define PREFS_NOTIFICATION @"com.huynguyen.actionbuttonmulticlick/prefsChanged"
 
+typedef CFArrayRef (*ABMDisplayIdentifiersFunction)(BOOL, BOOL);
+typedef CFStringRef (*ABMLocalizedNameFunction)(CFStringRef);
+typedef CFDataRef (*ABMIconDataFunction)(CFStringRef);
+static void *ABMCSpringBoardServicesHandle(void) { static void *handle; static dispatch_once_t once; dispatch_once(&once, ^{ handle = dlopen("/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices", RTLD_LAZY | RTLD_LOCAL); }); return handle ?: RTLD_DEFAULT; }
+static CFArrayRef ABMCopyDisplayIdentifiers(void) { static ABMDisplayIdentifiersFunction function; static dispatch_once_t once; dispatch_once(&once, ^{ function=(ABMDisplayIdentifiersFunction)dlsym(ABMCSpringBoardServicesHandle(), "SBSCopyApplicationDisplayIdentifiers"); }); return function ? function(YES, NO) : NULL; }
+static CFStringRef ABMCopyLocalizedName(CFStringRef identifier) { static ABMLocalizedNameFunction function; static dispatch_once_t once; dispatch_once(&once, ^{ function=(ABMLocalizedNameFunction)dlsym(ABMCSpringBoardServicesHandle(), "SBSCopyLocalizedApplicationNameForDisplayIdentifier"); }); return function ? function(identifier) : NULL; }
+static CFDataRef ABMCopyIconData(CFStringRef identifier) { static ABMIconDataFunction function; static dispatch_once_t once; dispatch_once(&once, ^{ function=(ABMIconDataFunction)dlsym(ABMCSpringBoardServicesHandle(), "SBSCopyIconImagePNGDataForDisplayIdentifier"); }); return function ? function(identifier) : NULL; }
+
 static CFPropertyListRef ABMCRead(CFStringRef key) {
     return CFPreferencesCopyValue(key, (__bridge CFStringRef)PREFS_DOMAIN, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
 }
@@ -88,7 +96,7 @@ static UIImage *ABMCIconFromSpringBoard(NSString *bundleID) {
     if (!bundleID.length) return nil;
     id cached = ABMCAppIconCache()[bundleID];
     if (cached) return cached == NSNull.null ? nil : cached;
-    CFDataRef rawData = SBSCopyIconImagePNGDataForDisplayIdentifier((__bridge CFStringRef)bundleID);
+    CFDataRef rawData = ABMCCopyIconData((__bridge CFStringRef)bundleID);
     UIImage *image = rawData ? [UIImage imageWithData:(__bridge NSData *)rawData] : nil;
     if (rawData) CFRelease(rawData);
     ABMCAppIconCache()[bundleID] = image ?: NSNull.null;
@@ -107,7 +115,7 @@ static UIImage *ABMCIconForAction(NSString *actionID, NSString *fallbackBundle) 
         UIImage *appIcon = ABMCAppIcon(icon);
         if (appIcon) return appIcon;
     }
-    NSDictionary *symbols = @{@"default":@"hand.tap", @"flashlight":@"flashlight.on.fill", @"camera":@"camera.fill", @"silent":@"speaker.slash.fill", @"screenshot":@"camera.viewfinder", @"lock":@"lock.fill", @"respring":@"arrow.clockwise", @"url:weixin://scanqrcode":@"qrcode.viewfinder", @"url:weixin://widget/pay":@"creditcard.fill", @"url:alipay://platformapi/startapp?appId=10000007":@"qrcode.viewfinder", @"url:alipay://platformapi/startapp?appId=20000056":@"creditcard.fill", @"none":@"nosign"};
+    NSDictionary *symbols = @{@"default":@"hand.tap", @"flashlight":@"flashlight.on.fill", @"camera":@"camera.fill", @"silent":@"speaker.slash.fill", @"screenshot":@"camera.viewfinder", @"lock":@"lock.fill", @"respring":@"arrow.clockwise", @"controlCenter":@"switch.2", @"notificationCenter":@"bell.fill", @"spotlight":@"magnifyingglass", @"screenRecord":@"record.circle", @"mediaPlayPause":@"playpause.fill", @"mediaPrevious":@"backward.fill", @"mediaNext":@"forward.fill", @"closeApps":@"rectangle.stack.fill", @"url:weixin://scanqrcode":@"qrcode.viewfinder", @"url:weixin://widget/pay":@"creditcard.fill", @"url:alipay://platformapi/startapp?appId=10000007":@"qrcode.viewfinder", @"url:alipay://platformapi/startapp?appId=20000056":@"creditcard.fill", @"none":@"nosign"};
     NSString *symbolName = symbols[actionID];
     return symbolName.length && [UIImage respondsToSelector:@selector(systemImageNamed:)] ? [UIImage systemImageNamed:symbolName] : nil;
 }
@@ -196,7 +204,7 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
 
 - (NSArray *)userApplications {
     @try {
-        CFArrayRef rawIdentifiers = SBSCopyApplicationDisplayIdentifiers(YES, NO);
+        CFArrayRef rawIdentifiers = ABMCCopyDisplayIdentifiers();
         NSArray *identifiers = rawIdentifiers ? (__bridge_transfer NSArray *)rawIdentifiers : @[];
         NSMutableArray *result = [NSMutableArray array];
         NSMutableSet *seen = [NSMutableSet set];
@@ -204,15 +212,24 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
             if (![object isKindOfClass:[NSString class]]) continue;
             NSString *bundle = object;
             if (!bundle.length || [seen containsObject:bundle]) continue;
-            CFStringRef rawName = SBSCopyLocalizedApplicationNameForDisplayIdentifier((__bridge CFStringRef)bundle);
+            CFStringRef rawName = ABMCCopyLocalizedName((__bridge CFStringRef)bundle);
             NSString *name = rawName ? (__bridge_transfer NSString *)rawName : nil;
             if (!name.length) name = bundle;
             [seen addObject:bundle];
-            CFDataRef rawIcon = SBSCopyIconImagePNGDataForDisplayIdentifier((__bridge CFStringRef)bundle);
+            CFDataRef rawIcon = ABMCCopyIconData((__bridge CFStringRef)bundle);
             UIImage *icon = rawIcon ? [UIImage imageWithData:(__bridge NSData *)rawIcon] : nil;
             if (rawIcon) CFRelease(rawIcon);
             if (icon) ABMCAppIconCache()[bundle] = icon;
-            [result addObject:@{@"name":name, @"bundle":bundle, @"path":@""}];
+            id application = nil;
+            Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
+            SEL applicationSelector = NSSelectorFromString(@"applicationForBundleIdentifier:");
+            if (workspaceClass && [workspaceClass respondsToSelector:NSSelectorFromString(@"defaultWorkspace")]) {
+                id workspace = ((id(*)(id,SEL))objc_msgSend)(workspaceClass, NSSelectorFromString(@"defaultWorkspace"));
+                if ([workspace respondsToSelector:applicationSelector]) application = ((id(*)(id,SEL,id))objc_msgSend)(workspace, applicationSelector, bundle);
+            }
+            id bundleURL = application && [application respondsToSelector:NSSelectorFromString(@"bundleURL")] ? ((id(*)(id,SEL))objc_msgSend)(application, NSSelectorFromString(@"bundleURL")) : nil;
+            NSString *path = [bundleURL respondsToSelector:@selector(path)] ? [bundleURL path] : @"";
+            [result addObject:@{@"name":name, @"bundle":bundle, @"path":path, @"proxy":application ?: [NSNull null]}];
         }
         ABMCLog(@"Loaded applications via SpringBoardServices count=%lu", (unsigned long)result.count);
         return [result sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [a[@"name"] localizedCaseInsensitiveCompare:b[@"name"]]; }];

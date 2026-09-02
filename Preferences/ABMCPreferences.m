@@ -2,8 +2,13 @@
 #import <Preferences/PSSpecifier.h>
 #import <UIKit/UIKit.h>
 #import <SpringBoardServices/SpringBoardServices.h>
+#import <dlfcn.h>
 
 #define PREFS_DOMAIN @"com.huynguyen.actionbuttonmulticlick"
+
+typedef CFDataRef (*ABMPreferencesIconFunction)(CFStringRef);
+static void *ABMCPreferencesServicesHandle(void) { static void *handle; static dispatch_once_t once; dispatch_once(&once, ^{ handle = dlopen("/System/Library/PrivateFrameworks/SpringBoardServices.framework/SpringBoardServices", RTLD_LAZY | RTLD_LOCAL); }); return handle ?: RTLD_DEFAULT; }
+static CFDataRef ABMCPreferencesCopyIconData(CFStringRef identifier) { static ABMPreferencesIconFunction function; static dispatch_once_t once; dispatch_once(&once, ^{ function=(ABMPreferencesIconFunction)dlsym(ABMCPreferencesServicesHandle(), "SBSCopyIconImagePNGDataForDisplayIdentifier"); }); return function ? function(identifier) : NULL; }
 
 static NSString *titleForActionID(NSString *actionID) {
     if (!actionID || [actionID isEqualToString:@"none"]) return @"无操作";
@@ -40,7 +45,7 @@ static UIImage *iconForActionID(NSString *actionID) {
     NSDictionary *meta = [allMeta isKindOfClass:[NSDictionary class]] ? allMeta[actionID] : nil;
     NSString *customIcon = [meta[@"icon"] isKindOfClass:[NSString class]] ? meta[@"icon"] : nil;
     if ([customIcon containsString:@"."]) {
-        CFDataRef rawIcon = SBSCopyIconImagePNGDataForDisplayIdentifier((__bridge CFStringRef)customIcon);
+        CFDataRef rawIcon = ABMCPreferencesCopyIconData((__bridge CFStringRef)customIcon);
         UIImage *image = rawIcon ? [UIImage imageWithData:(__bridge NSData *)rawIcon] : nil;
         if (rawIcon) CFRelease(rawIcon);
         if (image) return image;
@@ -48,7 +53,7 @@ static UIImage *iconForActionID(NSString *actionID) {
     if (customIcon.length) { UIImage *symbol = [UIImage systemImageNamed:customIcon]; if (symbol) return symbol; }
     if ([actionID hasPrefix:@"app:"]) {
         NSString *bundle = [actionID substringFromIndex:4];
-        CFDataRef rawIcon = SBSCopyIconImagePNGDataForDisplayIdentifier((__bridge CFStringRef)bundle);
+        CFDataRef rawIcon = ABMCPreferencesCopyIconData((__bridge CFStringRef)bundle);
         UIImage *image = rawIcon ? [UIImage imageWithData:(__bridge NSData *)rawIcon] : nil;
         if (rawIcon) CFRelease(rawIcon);
         if (image) return image;
