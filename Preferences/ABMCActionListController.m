@@ -200,36 +200,53 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
 
 - (NSArray *)userApplications {
     @try {
-        CFArrayRef rawIdentifiers = ABMCopyDisplayIdentifiers();
-        NSArray *identifiers = rawIdentifiers ? (__bridge_transfer NSArray *)rawIdentifiers : @[];
+        Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
+        SEL defaultSelector = NSSelectorFromString(@"defaultWorkspace");
+        id workspace = workspaceClass && [workspaceClass respondsToSelector:defaultSelector] ? ((id(*)(id,SEL))objc_msgSend)(workspaceClass, defaultSelector) : nil;
+        SEL allSelector = NSSelectorFromString(@"allInstalledApplications");
+        id rawApplications = workspace && [workspace respondsToSelector:allSelector] ? ((id(*)(id,SEL))objc_msgSend)(workspace, allSelector) : @[];
         NSMutableArray *result = [NSMutableArray array];
         NSMutableSet *seen = [NSMutableSet set];
-        for (id object in identifiers) {
-            if (![object isKindOfClass:[NSString class]]) continue;
-            NSString *bundle = object;
-            if (!bundle.length || [seen containsObject:bundle]) continue;
-            CFStringRef rawName = ABMCopyLocalizedName((__bridge CFStringRef)bundle);
-            NSString *name = rawName ? (__bridge_transfer NSString *)rawName : nil;
-            if (!name.length) name = bundle;
-            [seen addObject:bundle];
-            CFDataRef rawIcon = ABMCopyIconData((__bridge CFStringRef)bundle);
-            UIImage *icon = rawIcon ? [UIImage imageWithData:(__bridge NSData *)rawIcon] : nil;
-            if (rawIcon) CFRelease(rawIcon);
-            if (icon) ABMCAppIconCache()[bundle] = icon;
-            id application = nil;
-            Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
-            SEL applicationSelector = NSSelectorFromString(@"applicationForBundleIdentifier:");
-            if (workspaceClass && [workspaceClass respondsToSelector:NSSelectorFromString(@"defaultWorkspace")]) {
-                id workspace = ((id(*)(id,SEL))objc_msgSend)(workspaceClass, NSSelectorFromString(@"defaultWorkspace"));
-                if ([workspace respondsToSelector:applicationSelector]) application = ((id(*)(id,SEL,id))objc_msgSend)(workspace, applicationSelector, bundle);
+        for (id application in [rawApplications conformsToProtocol:@protocol(NSFastEnumeration)] ? rawApplications : @[]) {
+            NSString *bundle = nil; NSString *name = nil; NSString *path = @"";
+            for (NSString *selectorName in @[@"bundleIdentifier", @"applicationIdentifier"]) {
+                SEL selector = NSSelectorFromString(selectorName);
+                id value = [application respondsToSelector:selector] ? ((id(*)(id,SEL))objc_msgSend)(application, selector) : nil;
+                if ([value isKindOfClass:[NSString class]] && value.length) { bundle = value; break; }
             }
-            id bundleURL = application && [application respondsToSelector:NSSelectorFromString(@"bundleURL")] ? ((id(*)(id,SEL))objc_msgSend)(application, NSSelectorFromString(@"bundleURL")) : nil;
-            NSString *path = [bundleURL respondsToSelector:@selector(path)] ? [bundleURL path] : @"";
-            [result addObject:@{@"name":name, @"bundle":bundle, @"path":path, @"proxy":application ?: [NSNull null]}];
+            if (!bundle.length || [seen containsObject:bundle]) continue;
+            BOOL userApplication = YES;
+            SEL userSelector = NSSelectorFromString(@"isUserApplication");
+            if ([application respondsToSelector:userSelector]) userApplication = ((BOOL(*)(id,SEL))objc_msgSend)(application, userSelector);
+            NSString *type = nil;
+            SEL typeSelector = NSSelectorFromString(@"applicationType");
+            if ([application respondsToSelector:typeSelector]) type = ((id(*)(id,SEL))objc_msgSend)(application, typeSelector);
+            if (!userApplication && ![type isEqualToString:@"User"]) {
+                SEL urlSelector = NSSelectorFromString(@"bundleURL");
+                id url = [application respondsToSelector:urlSelector] ? ((id(*)(id,SEL))objc_msgSend)(application, urlSelector) : nil;
+                path = [url respondsToSelector:@selector(path)] ? [url path] : @"";
+                if (![path hasPrefix:@"/var/jb/"] && ![path hasPrefix:@"/Applications/"]) continue;
+            }
+            for (NSString *selectorName in @[@"localizedName", @"displayName"]) {
+                SEL selector = NSSelectorFromString(selectorName);
+                id value = [application respondsToSelector:selector] ? ((id(*)(id,SEL))objc_msgSend)(application, selector) : nil;
+                if ([value isKindOfClass:[NSString class]] && value.length) { name = value; break; }
+            }
+            SEL urlSelector = NSSelectorFromString(@"bundleURL");
+            id url = [application respondsToSelector:urlSelector] ? ((id(*)(id,SEL))objc_msgSend)(application, urlSelector) : nil;
+            if ([url respondsToSelector:@selector(path)]) path = [url path] ?: @"";
+            [seen addObject:bundle];
+            if (!name.length) name = bundle;
+            UIImage *icon = ABMCAppIcon(bundle);
+            if (icon) ABMCAppIconCache()[bundle] = icon;
+            [result addObject:@{@"name":name,@"bundle":bundle,@"path":path,@"proxy":application}];
         }
-        ABMCLog(@"Loaded applications via SpringBoardServices count=%lu", (unsigned long)result.count);
+        ABMCLog(@"Loaded filtered LaunchServices applications count=%lu", (unsigned long)result.count);
         return [result sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [a[@"name"] localizedCaseInsensitiveCompare:b[@"name"]]; }];
-    } @catch (NSException *exception) { ABMCLog(@"SpringBoard application read failed exception=%@", exception.reason ?: @"unknown"); return @[]; }
+    } @catch (NSException *exception) {
+        ABMCLog(@"LaunchServices application read failed exception=%@", exception.reason ?: @"unknown");
+        return @[];
+    }
 }
 
 - (NSArray *)workflowNames {
@@ -260,28 +277,38 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
     @try {
         NSMutableArray *result = [NSMutableArray array];
         for (NSDictionary *entry in [self userApplications]) {
-            NSString *path = entry[@"path"];
-            NSDictionary *info = path.length ? [NSDictionary dictionaryWithContentsOfFile:[path stringByAppendingPathComponent:@"Info.plist"]] : nil;
-            NSArray *declared = [info[@"UIApplicationShortcutItems"] isKindOfClass:[NSArray class]] ? info[@"UIApplicationShortcutItems"] : @[];
+            id application = entry[@"proxy"];
+            id rawItems = nil;
+            for (NSString *selectorName in @[@"staticShortcutItems", @"shortcutItems", @"applicationShortcutItems"]) {
+                SEL selector = NSSelectorFromString(selectorName);
+                if (application && application != NSNull.null && [application respondsToSelector:selector]) { rawItems = ((id(*)(id,SEL))objc_msgSend)(application, selector); if (rawItems) break; }
+            }
+            NSArray *declared = [rawItems isKindOfClass:[NSArray class]] ? rawItems : @[];
+            if (!declared.count) {
+                NSString *path = entry[@"path"];
+                NSDictionary *info = path.length ? [NSDictionary dictionaryWithContentsOfFile:[path stringByAppendingPathComponent:@"Info.plist"]] : nil;
+                declared = [info[@"UIApplicationShortcutItems"] isKindOfClass:[NSArray class]] ? info[@"UIApplicationShortcutItems"] : @[];
+            }
             NSMutableArray *items = [NSMutableArray array];
             NSMutableSet *seen = [NSMutableSet set];
-            for (NSDictionary *item in declared) {
-                if (![item isKindOfClass:[NSDictionary class]]) continue;
-                NSString *type = item[@"UIApplicationShortcutItemType"];
-                NSString *title = item[@"UIApplicationShortcutItemTitle"];
+            for (id object in declared) {
+                NSString *type = nil; NSString *title = nil;
+                if ([object isKindOfClass:[NSDictionary class]]) { type = object[@"UIApplicationShortcutItemType"]; title = object[@"UIApplicationShortcutItemTitle"]; }
+                else {
+                    for (NSString *selectorName in @[@"type", @"shortcutType"]) { SEL selector=NSSelectorFromString(selectorName); id value=[object respondsToSelector:selector]?((id(*)(id,SEL))objc_msgSend)(object,selector):nil; if ([value isKindOfClass:[NSString class]] && [value length]) { type=value; break; } }
+                    for (NSString *selectorName in @[@"localizedTitle", @"title"]) { SEL selector=NSSelectorFromString(selectorName); id value=[object respondsToSelector:selector]?((id(*)(id,SEL))objc_msgSend)(object,selector):nil; if ([value isKindOfClass:[NSString class]] && [value length]) { title=value; break; } }
+                }
                 if (!type.length || !title.length || [seen containsObject:type]) continue;
                 [seen addObject:type];
                 NSString *actionID = [NSString stringWithFormat:@"appshortcut:%@|%@|%@", entry[@"bundle"], type, title];
-                [items addObject:@{@"title":title,@"action":actionID,@"icon":ABMCIconForAction(actionID,entry[@"bundle"])}];
+                UIImage *icon = ABMCIconForAction(actionID, entry[@"bundle"]) ?: [UIImage systemImageNamed:@"square.grid.2x2.fill"];
+                [items addObject:@{@"title":title, @"action":actionID, @"icon":icon}];
             }
-            if (items.count) [result addObject:@{@"name":entry[@"name"],@"items":items}];
+            if (items.count) [result addObject:@{@"name":entry[@"name"], @"items":items}];
         }
-        ABMCLog(@"Loaded static app shortcuts safely groups=%lu", (unsigned long)result.count);
+        ABMCLog(@"Loaded app shortcut objects safely groups=%lu", (unsigned long)result.count);
         return result;
-    } @catch (NSException *exception) {
-        ABMCLog(@"App shortcut scan failed exception=%@", exception.reason ?: @"unknown");
-        return @[];
-    }
+    } @catch (NSException *exception) { ABMCLog(@"App shortcut object read failed exception=%@", exception.reason ?: @"unknown"); return @[]; }
 }
 
 - (NSArray *)specifiers {

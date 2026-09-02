@@ -51,13 +51,17 @@ static UIImage *iconForActionID(NSString *actionID) {
         if (image) return image;
     }
     if (customIcon.length) { UIImage *symbol = [UIImage systemImageNamed:customIcon]; if (symbol) return symbol; }
-    if ([actionID hasPrefix:@"app:"]) {
-        NSString *bundle = [actionID substringFromIndex:4];
-        CFDataRef rawIcon = ABMCPreferencesCopyIconData((__bridge CFStringRef)bundle);
+    NSString *bundleID = nil;
+    if ([actionID hasPrefix:@"app:"]) bundleID = [actionID substringFromIndex:4];
+    else if ([actionID hasPrefix:@"appshortcut:"]) bundleID = [[[actionID substringFromIndex:12] componentsSeparatedByString:@"|"] firstObject];
+    if (bundleID.length) {
+        CFDataRef rawIcon = ABMCPreferencesCopyIconData((__bridge CFStringRef)bundleID);
         UIImage *image = rawIcon ? [UIImage imageWithData:(__bridge NSData *)rawIcon] : nil;
         if (rawIcon) CFRelease(rawIcon);
         if (image) return image;
     }
+    if ([actionID hasPrefix:@"shortcut:"]) return [UIImage systemImageNamed:@"bolt.circle.fill"];
+    if ([actionID hasPrefix:@"url:"] || [actionID hasPrefix:@"customURL:"]) return [UIImage systemImageNamed:@"safari.fill"];
     NSDictionary *symbols = @{@"default":@"hand.tap.fill", @"flashlight":@"flashlight.on.fill", @"camera":@"camera.fill", @"silent":@"speaker.slash.fill", @"screenshot":@"camera.viewfinder", @"lock":@"lock.fill", @"respring":@"arrow.clockwise", @"url:weixin://scanqrcode":@"qrcode.viewfinder", @"url:weixin://widget/pay":@"creditcard.fill", @"url:alipay://platformapi/startapp?appId=10000007":@"qrcode.viewfinder", @"url:alipay://platformapi/startapp?appId=20000056":@"creditcard.fill", @"none":@"nosign"};
     return [UIImage systemImageNamed:symbols[actionID] ?: @"bolt.fill"];
 }
@@ -76,7 +80,10 @@ static UIImage *iconForActionID(NSString *actionID) {
             [spec setProperty:item[1] forKey:@"key"];
             [spec setProperty:item[2] forKey:@"default"];
             [spec setProperty:PREFS_DOMAIN forKey:@"defaults"];
-            UIImage *icon = iconForActionID(item[2]); if (icon) [spec setProperty:icon forKey:@"iconImage"];
+            NSString *key = item[1];
+            CFPropertyListRef rawValue = CFPreferencesCopyValue((__bridge CFStringRef)key, (__bridge CFStringRef)PREFS_DOMAIN, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+            NSString *currentAction = rawValue ? (__bridge_transfer NSString *)rawValue : item[2];
+            UIImage *icon = iconForActionID(currentAction.length ? currentAction : item[2]); if (icon) [spec setProperty:icon forKey:@"iconImage"];
             [specs addObject:spec];
         }
         _specifiers = specs;

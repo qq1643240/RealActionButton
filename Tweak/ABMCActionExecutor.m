@@ -130,7 +130,7 @@ BOOL ABMCPerformingDefaultAction = NO;
     } else if ([actionID hasPrefix:@"url:"]) {
         [self openURLString:[actionID substringFromIndex:4]];
     } else if ([actionID hasPrefix:@"customURL:"]) {
-        [self openConfiguredURL:[actionID substringFromIndex:10]];
+        [self openURLString:[actionID substringFromIndex:10]];
     }
 }
 
@@ -310,12 +310,25 @@ BOOL ABMCPerformingDefaultAction = NO;
 - (void)openApp:(NSString *)bundleID {
     if (!bundleID.length) return;
     @try {
-        ABMCSBSLaunchFunction launch = (ABMCSBSLaunchFunction)dlsym(RTLD_DEFAULT, "SBSLaunchApplicationWithIdentifier");
-        if (!launch) { ABMCLog(@"SpringBoardServices launch symbol unavailable bundle=%@", bundleID); return; }
-        launch((__bridge CFStringRef)bundleID, false);
-        ABMCLog(@"Application launched via SpringBoardServices bundle=%@", bundleID);
+        id application = [UIApplication sharedApplication];
+        SEL launchSelector = NSSelectorFromString(@"launchApplicationWithIdentifier:suspended:");
+        if (application && [application respondsToSelector:launchSelector]) {
+            ((BOOL(*)(id,SEL,id,BOOL))objc_msgSend)(application, launchSelector, bundleID, NO);
+            ABMCLog(@"Application launched via UIApplication private interface bundle=%@", bundleID);
+            return;
+        }
+        Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
+        SEL defaultSelector = NSSelectorFromString(@"defaultWorkspace");
+        id workspace = workspaceClass && [workspaceClass respondsToSelector:defaultSelector] ? ((id(*)(id,SEL))objc_msgSend)(workspaceClass, defaultSelector) : nil;
+        SEL openSelector = NSSelectorFromString(@"openApplicationWithBundleID:");
+        if (workspace && [workspace respondsToSelector:openSelector]) {
+            BOOL opened = ((BOOL(*)(id,SEL,id))objc_msgSend)(workspace, openSelector, bundleID);
+            ABMCLog(@"Application launched via LaunchServices bundle=%@ success=%@", bundleID, opened ? @"yes" : @"no");
+            return;
+        }
+        ABMCLog(@"Application launch interface unavailable bundle=%@", bundleID);
     } @catch (NSException *exception) {
-        ABMCLog(@"SpringBoardServices launch failed bundle=%@ exception=%@", bundleID, exception.reason ?: @"unknown");
+        ABMCLog(@"Application launch failed bundle=%@ exception=%@", bundleID, exception.reason ?: @"unknown");
     }
 }
 
@@ -458,26 +471,29 @@ BOOL ABMCPerformingDefaultAction = NO;
     if (parts.count < 2) return;
     NSString *bundleID = parts[0];
     NSString *type = parts[1];
+    NSString *title = parts.count > 2 ? parts[2] : type;
     if (!bundleID.length || !type.length) return;
     @try {
+        Class controllerClass = NSClassFromString(@"SBApplicationController");
+        id controller = controllerClass && [controllerClass respondsToSelector:NSSelectorFromString(@"sharedInstance")] ? ((id(*)(id,SEL))objc_msgSend)(controllerClass, NSSelectorFromString(@"sharedInstance")) : nil;
+        id application = nil;
+        for (NSString *selectorName in @[@"applicationWithBundleIdentifier:", @"applicationWithDisplayIdentifier:"]) {
+            SEL selector = NSSelectorFromString(selectorName);
+            if (controller && [controller respondsToSelector:selector]) { application = ((id(*)(id,SEL,id))objc_msgSend)(controller, selector, bundleID); if (application) break; }
+        }
         Class itemClass = NSClassFromString(@"SBSApplicationShortcutItem");
         id item = nil;
-        SEL initSel = NSSelectorFromString(@"initWithType:localizedTitle:localizedSubtitle:icon:userInfo:");
-        if (itemClass && [itemClass instancesRespondToSelector:initSel]) {
-            NSString *title = parts.count > 2 ? parts[2] : type;
-            item = ((id (*)(id, SEL, id, id, id, id, id))objc_msgSend)([itemClass alloc], initSel, type, title, nil, nil, nil);
+        SEL initSelector = NSSelectorFromString(@"initWithType:localizedTitle:localizedSubtitle:icon:userInfo:");
+        if (itemClass && [itemClass instancesRespondToSelector:initSelector]) item = ((id(*)(id,SEL,id,id,id,id,id))objc_msgSend)([itemClass alloc], initSelector, type, title, nil, nil, nil);
+        for (id target in @[application ?: NSNull.null, controller ?: NSNull.null]) for (NSString *selectorName in @[@"activateShortcutItem:", @"activateApplicationShortcutItem:", @"performShortcutItem:"]) {
+            SEL selector = NSSelectorFromString(selectorName);
+            if (target != NSNull.null && item && [target respondsToSelector:selector]) { ((void(*)(id,SEL,id))objc_msgSend)(target, selector, item); ABMCLog(@"App shortcut activated bundle=%@ type=%@ selector=%@", bundleID, type, selectorName); return; }
         }
         Class storeClass = NSClassFromString(@"SBApplicationShortcutStore");
-        SEL sharedSel = NSSelectorFromString(@"sharedInstance");
-        id store = storeClass && [storeClass respondsToSelector:sharedSel] ? ((id (*)(id, SEL))objc_msgSend)(storeClass, sharedSel) : nil;
-        for (NSString *name in @[@"activateShortcutItem:forBundleIdentifier:", @"activateShortcutItem:forApplication:"]) {
-            SEL selector = NSSelectorFromString(name);
-            if (item && store && [store respondsToSelector:selector]) {
-                ((void (*)(id, SEL, id, id))objc_msgSend)(store, selector, item, bundleID);
-                return;
-            }
-        }
-    } @catch (NSException *exception) {}
+        id store = storeClass && [storeClass respondsToSelector:NSSelectorFromString(@"sharedInstance")] ? ((id(*)(id,SEL))objc_msgSend)(storeClass, NSSelectorFromString(@"sharedInstance")) : nil;
+        for (NSString *selectorName in @[@"activateShortcutItem:forApplication:", @"activateShortcutItem:forBundleIdentifier:"]) { SEL selector=NSSelectorFromString(selectorName); if (store && item && [store respondsToSelector:selector]) { ((void(*)(id,SEL,id,id))objc_msgSend)(store,selector,item,[selectorName hasSuffix:@"Application:"] ? application : bundleID); ABMCLog(@"App shortcut store activated bundle=%@ type=%@",bundleID,type); return; } }
+    } @catch (NSException *exception) { ABMCLog(@"App shortcut activation failed bundle=%@ type=%@ exception=%@", bundleID, type, exception.reason ?: @"unknown"); }
+    ABMCLog(@"App shortcut unavailable; opening application bundle=%@ type=%@", bundleID, type);
     [self openApp:bundleID];
 }
 
@@ -486,29 +502,30 @@ BOOL ABMCPerformingDefaultAction = NO;
 - (void)runShortcut:(NSString *)name {
     if (!name.length) return;
     @try {
-        dlopen("/System/Library/PrivateFrameworks/WorkflowKit.framework/WorkflowKit", RTLD_LAZY);
-        for (NSString *className in @[@"WFWorkflowRunnerClient", @"WFWorkflowRunner", @"WFWorkflowExecutionService"]) {
-            Class cls = NSClassFromString(className);
-            if (!cls) continue;
-            NSMutableArray *targets = [NSMutableArray arrayWithObject:cls];
-            for (NSString *factoryName in @[@"sharedInstance", @"sharedClient", @"defaultClient", @"defaultRunner"]) {
-                SEL factory = NSSelectorFromString(factoryName);
-                if (![cls respondsToSelector:factory]) continue;
-                id target = ((id(*)(id,SEL))objc_msgSend)(cls, factory);
-                if (target) [targets addObject:target];
-            }
-            for (id target in targets) for (NSString *selectorName in @[@"runWorkflowWithName:", @"runShortcutWithName:", @"executeWorkflowNamed:", @"runWorkflowNamed:"]) {
-                SEL selector = NSSelectorFromString(selectorName);
-                if (![target respondsToSelector:selector]) continue;
-                ((void(*)(id,SEL,id))objc_msgSend)(target, selector, name);
-                ABMCLog(@"Shortcut background run requested class=%@ selector=%@ name=%@", className, selectorName, name);
-                return;
-            }
+        dlopen("/System/Library/PrivateFrameworks/WorkflowKit.framework/WorkflowKit", RTLD_LAZY | RTLD_LOCAL);
+        Class databaseClass = NSClassFromString(@"WFWorkflowDatabase");
+        id database = nil;
+        for (NSString *factoryName in @[@"defaultDatabase", @"sharedDatabase", @"database"]) { SEL selector=NSSelectorFromString(factoryName); if (databaseClass && [databaseClass respondsToSelector:selector]) { database=((id(*)(id,SEL))objc_msgSend)(databaseClass,selector); if (database) break; } }
+        id workflow = nil;
+        for (NSString *selectorName in @[@"workflowWithName:", @"workflowNamed:", @"workflowForName:"]) { SEL selector=NSSelectorFromString(selectorName); if (database && [database respondsToSelector:selector]) { workflow=((id(*)(id,SEL,id))objc_msgSend)(database,selector,name); if (workflow) break; } }
+        if (!workflow && database) {
+            for (NSString *selectorName in @[@"workflows", @"allWorkflows"]) { SEL selector=NSSelectorFromString(selectorName); id workflows=[database respondsToSelector:selector]?((id(*)(id,SEL))objc_msgSend)(database,selector):nil; for (id candidate in [workflows conformsToProtocol:@protocol(NSFastEnumeration)] ? workflows : @[]) { SEL nameSelector=NSSelectorFromString(@"name"); NSString *candidateName=[candidate respondsToSelector:nameSelector]?((id(*)(id,SEL))objc_msgSend)(candidate,nameSelector):nil; if ([candidateName isEqualToString:name]) { workflow=candidate; break; } } if (workflow) break; }
         }
-        ABMCLog(@"Shortcut background runner unavailable name=%@", name);
-    } @catch (NSException *exception) {
-        ABMCLog(@"Shortcut background run failed name=%@ exception=%@", name, exception.reason ?: @"unknown");
-    }
+        Class controllerClass = NSClassFromString(@"WFWorkflowController");
+        id controller = nil;
+        for (NSString *factoryName in @[@"sharedInstance", @"sharedController", @"defaultController"]) { SEL selector=NSSelectorFromString(factoryName); if (controllerClass && [controllerClass respondsToSelector:selector]) { controller=((id(*)(id,SEL))objc_msgSend)(controllerClass,selector); if (controller) break; } }
+        if (!controller && controllerClass) controller=[[controllerClass alloc] init];
+        for (NSString *selectorName in @[@"runWorkflow:withInput:source:", @"runWorkflow:withInput:", @"runWorkflow:"]) {
+            SEL selector=NSSelectorFromString(selectorName);
+            if (!workflow || !controller || ![controller respondsToSelector:selector]) continue;
+            if ([selectorName isEqualToString:@"runWorkflow:withInput:source:"]) ((void(*)(id,SEL,id,id,id))objc_msgSend)(controller,selector,workflow,nil,nil);
+            else if ([selectorName isEqualToString:@"runWorkflow:withInput:"]) ((void(*)(id,SEL,id,id))objc_msgSend)(controller,selector,workflow,nil);
+            else ((void(*)(id,SEL,id))objc_msgSend)(controller,selector,workflow);
+            ABMCLog(@"Shortcut native workflow run requested name=%@ selector=%@", name, selectorName);
+            return;
+        }
+        ABMCLog(@"Shortcut native workflow unavailable name=%@ workflow=%@ controller=%@", name, workflow ? @"yes" : @"no", controller ? @"yes" : @"no");
+    } @catch (NSException *exception) { ABMCLog(@"Shortcut native workflow failed name=%@ exception=%@", name, exception.reason ?: @"unknown"); }
 }
 
 @end
