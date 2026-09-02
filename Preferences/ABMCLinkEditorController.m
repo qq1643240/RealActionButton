@@ -29,9 +29,13 @@
 - (void)viewDidLoad {
     [super viewDidLoad]; self.view.backgroundColor=[UIColor systemGroupedBackgroundColor]; self.title=_oldURL.length?@"编辑链接":@"自定义链接";
     self.navigationItem.rightBarButtonItem=[[UIBarButtonItem alloc] initWithTitle:@"存储" style:UIBarButtonItemStyleDone target:self action:@selector(save)];
-    CFPropertyListRef raw=CFPreferencesCopyValue(CFSTR("customLinks"),(__bridge CFStringRef)ABMCLinkDomain,kCFPreferencesCurrentUser,kCFPreferencesAnyHost);
-    NSArray *links=raw?(__bridge_transfer NSArray *)raw:@[]; NSDictionary *found=nil;
-    for (NSDictionary *item in [links isKindOfClass:[NSArray class]]?links:@[]) if ([item[@"url"] isEqual:_oldURL]) { found=item; break; }
+    BOOL presetMode = [self.key isEqualToString:@"presetLinks"];
+    CFStringRef storageKey = presetMode ? CFSTR("presetLinks") : CFSTR("customLinks");
+    CFPropertyListRef raw=CFPreferencesCopyValue(storageKey,(__bridge CFStringRef)ABMCLinkDomain,kCFPreferencesCurrentUser,kCFPreferencesAnyHost); NSArray *links=raw?(__bridge_transfer NSArray *)raw:@[]; NSDictionary *found=nil;
+    for (NSDictionary *item in [links isKindOfClass:[NSArray class]] ? links : @[]) {
+        if (![item isKindOfClass:[NSDictionary class]]) continue;
+        if ([item[@"url"] isEqual:_oldURL]) { found=item; break; }
+    }
     UIScrollView *scroll=[[UIScrollView alloc] initWithFrame:self.view.bounds]; scroll.autoresizingMask=UIViewAutoresizingFlexibleWidth|UIViewAutoresizingFlexibleHeight; [self.view addSubview:scroll];
     UIView *content=[UIView new]; content.translatesAutoresizingMaskIntoConstraints=NO; [scroll addSubview:content];
     [NSLayoutConstraint activateConstraints:@[[content.leadingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.leadingAnchor], [content.trailingAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.trailingAnchor], [content.topAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.topAnchor], [content.bottomAnchor constraintEqualToAnchor:scroll.contentLayoutGuide.bottomAnchor], [content.widthAnchor constraintEqualToAnchor:scroll.frameLayoutGuide.widthAnchor]]];
@@ -49,11 +53,16 @@
     BOOL presetMode = [self.key isEqualToString:@"presetLinks"];
     CFStringRef storageKey = presetMode ? CFSTR("presetLinks") : CFSTR("customLinks");
     CFPropertyListRef raw=CFPreferencesCopyValue(storageKey,(__bridge CFStringRef)ABMCLinkDomain,kCFPreferencesCurrentUser,kCFPreferencesAnyHost); NSArray *saved=raw?(__bridge_transfer NSArray *)raw:@[]; NSMutableArray *result=[NSMutableArray array];
-    for (NSDictionary *item in [saved isKindOfClass:[NSArray class]]?saved:@[]) if (![item[@"url"] isEqual:_oldURL]) [result addObject:item];
+    for (id object in [saved isKindOfClass:[NSArray class]] ? saved : @[]) {
+        if (![object isKindOfClass:[NSDictionary class]]) continue;
+        NSDictionary *item = object;
+        if (![item[@"url"] isEqual:_oldURL]) [result addObject:item];
+    }
     [result addObject:@{@"title":title,@"icon":icon?:@"",@"url":url,@"browser":@(self.browserSwitch.on)}];
     CFPreferencesSetValue(storageKey,(__bridge CFPropertyListRef)result,(__bridge CFStringRef)ABMCLinkDomain,kCFPreferencesCurrentUser,kCFPreferencesAnyHost);
     if (!presetMode) CFPreferencesSetValue((__bridge CFStringRef)self.key,(__bridge CFPropertyListRef)[@"customURL:" stringByAppendingString:url],(__bridge CFStringRef)ABMCLinkDomain,kCFPreferencesCurrentUser,kCFPreferencesAnyHost);
     CFPreferencesSynchronize((__bridge CFStringRef)ABMCLinkDomain,kCFPreferencesCurrentUser,kCFPreferencesAnyHost);
-    ABMCLog(@"Link editor saved mode=%@ key=%@ title=%@ url=%@ browser=%@",presetMode?@"preset":@"custom",self.key,title,url,self.browserSwitch.on?@"on":@"off"); CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),(__bridge CFStringRef)ABMCLinkNotice,NULL,NULL,YES); [self.navigationController popViewControllerAnimated:YES];
+    _oldURL = [url copy];
+    ABMCLog(@"Link editor saved mode=%@ key=%@ title=%@ url=%@ browser=%@",presetMode?@"preset":@"custom",self.key,title,url,self.browserSwitch.on?@"on":@"off"); CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),(__bridge CFStringRef)ABMCLinkNotice,NULL,NULL,YES); [self.view endEditing:YES];
 }
 @end

@@ -3,6 +3,7 @@
 #import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import <dlfcn.h>
 #import "../ABMCLogger.h"
 
 #define PREFS_DOMAIN CFSTR("com.huynguyen.actionbuttonmulticlick")
@@ -497,14 +498,30 @@ BOOL ABMCPerformingDefaultAction = NO;
 
 - (void)runShortcut:(NSString *)name {
     if (!name.length) return;
-
-    NSString *encoded = [name stringByAddingPercentEncodingWithAllowedCharacters:[NSCharacterSet URLQueryAllowedCharacterSet]];
-    NSString *urlString = [NSString stringWithFormat:@"shortcuts://run-shortcut?name=%@", encoded];
-    NSURL *url = [NSURL URLWithString:urlString];
-    if (!url) return;
-
-    id app = [UIApplication sharedApplication];
-    ((void (*)(id, SEL, id, id, id))objc_msgSend)(app, NSSelectorFromString(@"openURL:options:completionHandler:"), url, @{}, nil);
+    @try {
+        dlopen("/System/Library/PrivateFrameworks/WorkflowKit.framework/WorkflowKit", RTLD_LAZY);
+        for (NSString *className in @[@"WFWorkflowRunnerClient", @"WFWorkflowRunner", @"WFWorkflowExecutionService"]) {
+            Class cls = NSClassFromString(className);
+            if (!cls) continue;
+            NSMutableArray *targets = [NSMutableArray arrayWithObject:cls];
+            for (NSString *factoryName in @[@"sharedInstance", @"sharedClient", @"defaultClient", @"defaultRunner"]) {
+                SEL factory = NSSelectorFromString(factoryName);
+                if (![cls respondsToSelector:factory]) continue;
+                id target = ((id(*)(id,SEL))objc_msgSend)(cls, factory);
+                if (target) [targets addObject:target];
+            }
+            for (id target in targets) for (NSString *selectorName in @[@"runWorkflowWithName:", @"runShortcutWithName:", @"executeWorkflowNamed:", @"runWorkflowNamed:"]) {
+                SEL selector = NSSelectorFromString(selectorName);
+                if (![target respondsToSelector:selector]) continue;
+                ((void(*)(id,SEL,id))objc_msgSend)(target, selector, name);
+                ABMCLog(@"Shortcut background run requested class=%@ selector=%@ name=%@", className, selectorName, name);
+                return;
+            }
+        }
+        ABMCLog(@"Shortcut background runner unavailable name=%@", name);
+    } @catch (NSException *exception) {
+        ABMCLog(@"Shortcut background run failed name=%@ exception=%@", name, exception.reason ?: @"unknown");
+    }
 }
 
 @end

@@ -5,7 +5,6 @@
 #import <dlfcn.h>
 #import <sqlite3.h>
 #import "../ABMCLogger.h"
-#import "ABMCActionEditorController.h"
 #import "ABMCLinkEditorController.h"
 
 #define PREFS_DOMAIN @"com.huynguyen.actionbuttonmulticlick"
@@ -41,6 +40,10 @@ static BOOL ABMCBuiltInURL(NSString *url) {
     if ([url hasPrefix:@"customURL:"]) url = [url substringFromIndex:10];
     return [@[@"weixin://scanqrcode", @"weixin://widget/pay", @"alipay://platformapi/startapp?appId=10000007", @"alipay://platformapi/startapp?appId=20000056"] containsObject:url];
 }
+static NSString *ABMCString(id object, NSString *selectorName) {
+    SEL selector = NSSelectorFromString(selectorName);
+    return object && [object respondsToSelector:selector] ? ((id(*)(id,SEL))objc_msgSend)(object, selector) : nil;
+}
 static NSArray *ABMCShortcutNamesFromDatabase(NSString *path) {
     if (![[NSFileManager defaultManager] fileExistsAtPath:path]) return @[];
     sqlite3 *database = NULL;
@@ -74,29 +77,28 @@ static NSArray *ABMCShortcutNamesFromDatabase(NSString *path) {
     sqlite3_close(database);
     return names.array;
 }
+static NSMutableDictionary *ABMCAppIconCache(void) {
+    static NSMutableDictionary *cache;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{ cache = [NSMutableDictionary dictionary]; });
+    return cache;
+}
+static UIImage *ABMCApplicationIcon(id application) {
+    if (!application) return nil;
+    @try {
+        for (NSString *selectorName in @[@"icon", @"applicationIcon", @"iconImage"]) {
+            SEL selector = NSSelectorFromString(selectorName);
+            if (![application respondsToSelector:selector]) continue;
+            id image = ((id(*)(id,SEL))objc_msgSend)(application, selector);
+            if ([image isKindOfClass:[UIImage class]]) return image;
+        }
+    } @catch (NSException *exception) { ABMCLog(@"Application icon accessor failed exception=%@", exception.reason ?: @"unknown"); }
+    return nil;
+}
 static UIImage *ABMCAppIcon(NSString *bundleID) {
     if (!bundleID.length) return nil;
-    @try {
-        NSArray *roots = @[@"/var/containers/Bundle/Application", @"/var/jb/Applications", @"/Applications"];
-        NSFileManager *manager = [NSFileManager defaultManager];
-        for (NSString *root in roots) {
-            NSDirectoryEnumerator *enumerator = [manager enumeratorAtPath:root];
-            NSString *relative = nil;
-            while ((relative = [enumerator nextObject])) {
-                if (![relative.lastPathComponent isEqualToString:@"Info.plist"] || ![relative containsString:@".app/"]) continue;
-                NSString *infoPath = [root stringByAppendingPathComponent:relative];
-                NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:infoPath];
-                if (![info[@"CFBundleIdentifier"] isEqualToString:bundleID]) continue;
-                NSString *appPath = [infoPath stringByDeletingLastPathComponent];
-                NSArray *files = info[@"CFBundleIcons"][@"CFBundlePrimaryIcon"][@"CFBundleIconFiles"] ?: info[@"CFBundleIconFiles"];
-                NSString *file = [files isKindOfClass:[NSArray class]] ? files.lastObject : ([files isKindOfClass:[NSString class]] ? files : nil);
-                if (!file.length) continue;
-                NSArray *candidates = @[[appPath stringByAppendingPathComponent:file], [appPath stringByAppendingPathComponent:[file stringByAppendingPathExtension:@"png"]]];
-                for (NSString *candidate in candidates) { UIImage *image = [UIImage imageWithContentsOfFile:candidate]; if (image) return image; }
-            }
-        }
-    } @catch (NSException *exception) { ABMCLog(@"Application icon lookup failed bundle=%@ exception=%@", bundleID, exception.reason ?: @"unknown"); }
-    return nil;
+    id cached = ABMCAppIconCache()[bundleID];
+    return cached && cached != NSNull.null && [cached isKindOfClass:[UIImage class]] ? cached : nil;
 }
 static UIImage *ABMCIconForAction(NSString *actionID, NSString *fallbackBundle) {
     NSString *icon = ABMCMetadata(actionID)[@"icon"] ?: fallbackBundle;
@@ -108,26 +110,22 @@ static UIImage *ABMCIconForAction(NSString *actionID, NSString *fallbackBundle) 
         UIImage *appIcon = ABMCAppIcon(icon);
         if (appIcon) return appIcon;
     }
-    NSDictionary *symbols = @{@"default":@"hand.tap", @"flashlight":@"flashlight.on.fill", @"camera":@"camera.fill", @"silent":@"speaker.slash.fill", @"screenshot":@"camera.viewfinder", @"lock":@"lock.fill", @"respring":@"arrow.clockwise", @"controlCenter":@"switch.2", @"notificationCenter":@"bell.fill", @"spotlight":@"magnifyingglass", @"screenRecord":@"record.circle", @"mediaPlayPause":@"playpause.fill", @"mediaPrevious":@"backward.fill", @"mediaNext":@"forward.fill", @"closeApps":@"rectangle.stack.fill"};
+    NSDictionary *symbols = @{@"default":@"hand.tap", @"flashlight":@"flashlight.on.fill", @"camera":@"camera.fill", @"silent":@"speaker.slash.fill", @"screenshot":@"camera.viewfinder", @"lock":@"lock.fill", @"respring":@"arrow.clockwise", @"url:weixin://scanqrcode":@"qrcode.viewfinder", @"url:weixin://widget/pay":@"creditcard.fill", @"url:alipay://platformapi/startapp?appId=10000007":@"qrcode.viewfinder", @"url:alipay://platformapi/startapp?appId=20000056":@"creditcard.fill", @"none":@"nosign"};
     NSString *symbolName = symbols[actionID];
     return symbolName.length && [UIImage respondsToSelector:@selector(systemImageNamed:)] ? [UIImage systemImageNamed:symbolName] : nil;
 }
 static NSString *ABMCActionTitle(NSString *actionID) {
+    NSDictionary *meta = ABMCMetadata(actionID);
+    NSString *custom = [meta[@"title"] isKindOfClass:[NSString class]] ? meta[@"title"] : nil;
+    if (custom.length && ![custom isEqualToString:actionID]) return custom;
     NSDictionary *titles = @{@"default":@"系统默认", @"flashlight":@"手电筒", @"camera":@"相机", @"silent":@"静音模式", @"screenshot":@"屏幕截图", @"lock":@"锁定屏幕", @"respring":@"重启桌面", @"controlCenter":@"控制中心", @"notificationCenter":@"通知中心", @"spotlight":@"聚焦搜索", @"screenRecord":@"屏幕录制", @"mediaPlayPause":@"播放暂停", @"mediaPrevious":@"上一首歌", @"mediaNext":@"下一首歌", @"closeApps":@"关闭应用", @"none":@"关闭动作", @"url:weixin://scanqrcode":@"微信扫一扫", @"url:weixin://widget/pay":@"微信付款码", @"url:alipay://platformapi/startapp?appId=10000007":@"支付宝扫一扫", @"url:alipay://platformapi/startapp?appId=20000056":@"支付宝付款码"};
     if (titles[actionID]) return titles[actionID];
-    NSDictionary *meta = ABMCMetadata(actionID);
-    if ([meta[@"title"] isKindOfClass:[NSString class]] && [meta[@"title"] length]) return meta[@"title"];
     if ([actionID hasPrefix:@"app:"]) return meta[@"appName"] ?: [actionID substringFromIndex:4];
     if ([actionID hasPrefix:@"shortcut:"]) return [actionID substringFromIndex:9];
     if ([actionID hasPrefix:@"appshortcut:"]) { NSArray *parts = [[actionID substringFromIndex:12] componentsSeparatedByString:@"|"]; return parts.count > 2 ? parts[2] : @"快捷方式"; }
     if ([actionID hasPrefix:@"customURL:"]) {
         NSString *url = [actionID substringFromIndex:10];
-        CFPropertyListRef rawLinks = ABMCRead(CFSTR("customLinks"));
-        NSArray *links = rawLinks ? (__bridge_transfer NSArray *)rawLinks : @[];
-        for (NSDictionary *link in [links isKindOfClass:[NSArray class]] ? links : @[]) if ([link[@"url"] isEqual:url] && [link[@"title"] length]) return link[@"title"];
-        CFPropertyListRef rawPresets = ABMCRead(CFSTR("presetLinks"));
-        NSArray *presets = rawPresets ? (__bridge_transfer NSArray *)rawPresets : @[];
-        for (NSDictionary *preset in [presets isKindOfClass:[NSArray class]] ? presets : @[]) if ([preset[@"url"] isEqual:url] && [preset[@"title"] length]) return preset[@"title"];
+        for (NSString *key in @[@"customLinks",@"presetLinks"]) { CFPropertyListRef raw=ABMCRead((__bridge CFStringRef)key); NSArray *items=raw?(__bridge_transfer NSArray *)raw:@[]; for(NSDictionary *item in [items isKindOfClass:[NSArray class]]?items:@[]) if([item[@"url"] isEqual:url]&&[item[@"title"] length]) return item[@"title"]; }
         return @"自定义链接";
     }
     return actionID.length ? actionID : @"关闭动作";
@@ -147,9 +145,12 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
 - (NSArray *)appShortcutGroups;
 - (void)deleteActionID:(NSString *)actionID;
 - (void)confirmDeleteActionID:(NSString *)actionID;
+- (NSString *)linkStorageKeyForURL:(NSString *)url;
+- (void)openLinkEditorForActionID:(NSString *)actionID;
+- (void)promptEditActionID:(NSString *)actionID;
 @end
 
-@implementation ABMCActionListController { NSString *_prefKey; NSString *_currentValue; NSString *_category; BOOL _editingMode; NSString *_searchText; }
+@implementation ABMCActionListController { NSString *_prefKey; NSString *_currentValue; NSString *_category; NSString *_searchText; }
 
 - (instancetype)initWithPreferenceKey:(NSString *)preferenceKey category:(NSString *)category {
     self = [super init];
@@ -176,18 +177,10 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
 - (NSString *)categoryTitle {
     return (@{@"basic":@"基础动作", @"apps":@"应用打开", @"shortcuts":@"快捷方式", @"commands":@"快捷指令", @"links":@"打开链接", @"presets":@"系统预设"}[_category]) ?: @"按钮动作";
 }
-- (void)toggleEditing {
-    _editingMode = !_editingMode;
-    self.navigationItem.rightBarButtonItem.title = _editingMode ? @"完成" : @"编辑动作";
-    ABMCLog(@"Editing mode %@ key=%@ category=%@", _editingMode ? @"enabled" : @"disabled", _prefKey ?: @"(nil)", _category ?: @"root");
-    _specifiers = nil;
-    [self reloadSpecifiers];
-}
 - (void)viewDidLoad {
     [super viewDidLoad];
-    self.title = [self gestureTitle];
-    self.navigationItem.prompt = _category.length ? [self categoryTitle] : nil;
-    self.navigationItem.rightBarButtonItem = [[UIBarButtonItem alloc] initWithTitle:@"编辑动作" style:UIBarButtonItemStylePlain target:self action:@selector(toggleEditing)];
+    self.title = _category.length ? [self categoryTitle] : [self gestureTitle];
+    self.navigationItem.prompt = nil;
     if (_category.length) {
         UISearchBar *search = [[UISearchBar alloc] initWithFrame:CGRectMake(0, 0, CGRectGetWidth(self.table.bounds), 52)];
         search.placeholder = @"搜索动作";
@@ -206,30 +199,25 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
 
 - (NSArray *)userApplications {
     @try {
-        NSMutableDictionary *unique = [NSMutableDictionary dictionary];
-        NSArray *roots = @[@"/var/containers/Bundle/Application", @"/var/jb/Applications", @"/Applications"];
-        NSFileManager *manager = [NSFileManager defaultManager];
-        for (NSString *root in roots) {
-            NSDirectoryEnumerator *enumerator = [manager enumeratorAtPath:root];
-            NSString *relative = nil;
-            while ((relative = [enumerator nextObject])) {
-                if (![relative.lastPathComponent isEqualToString:@"Info.plist"] || ![relative containsString:@".app/"]) continue;
-                NSString *infoPath = [root stringByAppendingPathComponent:relative];
-                NSDictionary *info = [NSDictionary dictionaryWithContentsOfFile:infoPath];
-                NSString *bundle = info[@"CFBundleIdentifier"];
-                NSString *name = info[@"CFBundleDisplayName"] ?: info[@"CFBundleName"];
-                if (!bundle.length || !name.length || unique[bundle]) continue;
-                NSString *appPath = [infoPath stringByDeletingLastPathComponent];
-                unique[bundle] = @{ @"name": name, @"bundle": bundle, @"path": appPath };
-            }
+        Class cls = NSClassFromString(@"LSApplicationWorkspace");
+        id workspace = cls && [cls respondsToSelector:NSSelectorFromString(@"defaultWorkspace")] ? ((id(*)(id,SEL))objc_msgSend)(cls, NSSelectorFromString(@"defaultWorkspace")) : nil;
+        NSArray *all = workspace && [workspace respondsToSelector:NSSelectorFromString(@"allInstalledApplications")] ? ((id(*)(id,SEL))objc_msgSend)(workspace, NSSelectorFromString(@"allInstalledApplications")) : @[];
+        NSMutableArray *result = [NSMutableArray array]; NSMutableSet *seen = [NSMutableSet set];
+        for (id app in all) {
+            NSString *bundle = ABMCString(app, @"bundleIdentifier"); NSString *name = ABMCString(app, @"localizedName"); NSString *type = ABMCString(app, @"applicationType");
+            id bundleURL = [app respondsToSelector:NSSelectorFromString(@"bundleURL")] ? ((id(*)(id,SEL))objc_msgSend)(app, NSSelectorFromString(@"bundleURL")) : nil;
+            NSString *path = [bundleURL respondsToSelector:@selector(path)] ? [bundleURL path] : @"";
+            BOOL user = [type isEqualToString:@"User"] || ([app respondsToSelector:NSSelectorFromString(@"isUserApplication")] && ((BOOL(*)(id,SEL))objc_msgSend)(app, NSSelectorFromString(@"isUserApplication")));
+            BOOL jailbreak = [path hasPrefix:@"/var/jb/"] || [path hasPrefix:@"/Applications/"];
+            if (!bundle.length || !name.length || [seen containsObject:bundle] || (!user && !jailbreak)) continue;
+            [seen addObject:bundle];
+            UIImage *icon = ABMCApplicationIcon(app);
+            if (icon) ABMCAppIconCache()[bundle] = icon;
+            [result addObject:@{@"name":name,@"bundle":bundle,@"path":path,@"proxy":app}];
         }
-        NSArray *result = unique.allValues;
-        ABMCLog(@"Loaded applications safely count=%lu", (unsigned long)result.count);
+        ABMCLog(@"Loaded applications via workspace count=%lu", (unsigned long)result.count);
         return [result sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [a[@"name"] localizedCaseInsensitiveCompare:b[@"name"]]; }];
-    } @catch (NSException *exception) {
-        ABMCLog(@"Application scan failed exception=%@", exception.reason ?: @"unknown");
-        return @[];
-    }
+    } @catch (NSException *exception) { ABMCLog(@"Application workspace read failed exception=%@", exception.reason ?: @"unknown"); return @[]; }
 }
 
 - (NSArray *)workflowNames {
@@ -240,7 +228,12 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
             if (!data.length) continue;
             id object = [path.pathExtension.lowercaseString isEqualToString:@"json"] ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : [NSPropertyListSerialization propertyListWithData:data options:NSPropertyListImmutable format:nil error:nil];
             NSArray *items = [object isKindOfClass:[NSArray class]] ? object : ([object isKindOfClass:[NSDictionary class]] ? object[@"workflows"] ?: object[@"shortcuts"] : nil);
-            for (id item in items) { NSString *name = [item isKindOfClass:[NSString class]] ? item : (item[@"name"] ?: item[@"title"] ?: item[@"WFWorkflowName"]); if ([name isKindOfClass:[NSString class]] && name.length) [names addObject:name]; }
+            for (id item in items) {
+                NSString *name = nil;
+                if ([item isKindOfClass:[NSString class]]) name = item;
+                else if ([item isKindOfClass:[NSDictionary class]]) name = item[@"name"] ?: item[@"title"] ?: item[@"WFWorkflowName"];
+                if ([name isKindOfClass:[NSString class]] && name.length) [names addObject:name];
+            }
         }
         for (NSString *path in @[@"/var/mobile/Library/Shortcuts/Shortcuts.sqlite", @"/var/mobile/Library/Shortcuts/Shortcuts.db", @"/var/mobile/Library/Shortcuts/ShortcutsStore.sqlite", @"/var/mobile/Library/Shortcuts/ShortcutsStore.db", @"/private/var/mobile/Library/Shortcuts/Shortcuts.sqlite", @"/private/var/mobile/Library/Shortcuts/Shortcuts.db", @"/private/var/mobile/Library/Shortcuts/ShortcutsStore.sqlite", @"/private/var/mobile/Library/Shortcuts/ShortcutsStore.db"]) for (NSString *name in ABMCShortcutNamesFromDatabase(path)) [names addObject:name];
         ABMCLog(@"Loaded shortcut names safely count=%lu", (unsigned long)names.count);
@@ -294,7 +287,7 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
         for (NSArray *item in categories) [specs addObject:ABMCRow(item[0], item[1], self, [UIImage systemImageNamed:item[2]])];
     } else if ([_category isEqualToString:@"basic"]) {
         [specs addObject:[PSSpecifier groupSpecifierWithName:@"基础动作"]];
-        NSArray *actions = @[@[@"系统默认", @"default"], @[@"手电筒", @"flashlight"], @[@"相机", @"camera"], @[@"静音模式", @"silent"], @[@"屏幕截图", @"screenshot"], @[@"控制中心", @"controlCenter"], @[@"通知中心", @"notificationCenter"], @[@"聚焦搜索", @"spotlight"], @[@"屏幕录制", @"screenRecord"], @[@"锁定屏幕", @"lock"], @[@"播放暂停", @"mediaPlayPause"], @[@"上一首歌", @"mediaPrevious"], @[@"下一首歌", @"mediaNext"], @[@"关闭应用", @"closeApps"], @[@"重启桌面", @"respring"], @[@"微信扫一扫", @"url:weixin://scanqrcode"], @[@"微信付款码", @"url:weixin://widget/pay"], @[@"支付宝扫一扫", @"url:alipay://platformapi/startapp?appId=10000007"], @[@"支付宝付款码", @"url:alipay://platformapi/startapp?appId=20000056"], @[@"关闭动作", @"none"]];
+        NSArray *actions = @[@[@"系统默认", @"default"], @[@"切换手电筒", @"flashlight"], @[@"打开相机", @"camera"], @[@"切换静音模式", @"silent"], @[@"截屏", @"screenshot"], @[@"锁定设备", @"lock"], @[@"注销弹簧板", @"respring"], @[@"微信扫一扫", @"url:weixin://scanqrcode"], @[@"微信付款码", @"url:weixin://widget/pay"], @[@"支付宝扫码", @"url:alipay://platformapi/startapp?appId=10000007"], @[@"支付宝付款", @"url:alipay://platformapi/startapp?appId=20000056"], @[@"无操作", @"none"]];
         for (NSArray *item in actions) [specs addObject:ABMCRow(item[0], item[1], self, ABMCIconForAction(item[1], nil))];
     } else if ([_category isEqualToString:@"apps"]) {
         [specs addObject:[PSSpecifier groupSpecifierWithName:@"用户应用、TrollStore 和越狱应用"]];
@@ -333,8 +326,9 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
         NSArray *defaults = @[@{@"title":@"网页搜索",@"url":@"https://www.baidu.com/s?wd=$$$",@"icon":@"magnifyingglass"},@{@"title":@"地图搜索",@"url":@"maps://?q=$$$",@"icon":@"map.fill"},@{@"title":@"剪贴板搜索",@"url":@"https://www.google.com/search?q=$$$",@"icon":@"doc.on.clipboard.fill"}];
         CFPropertyListRef rawPresets = ABMCRead(CFSTR("presetLinks"));
         NSArray *savedPresets = rawPresets ? (__bridge_transfer NSArray *)rawPresets : @[];
+        NSSet *deletedPresets = [NSSet setWithArray:[savedPresets valueForKey:@"deletedDefault"] ?: @[]];
         for (NSDictionary *item in [defaults arrayByAddingObjectsFromArray:[savedPresets isKindOfClass:[NSArray class]] ? savedPresets : @[]]) {
-            NSString *url = item[@"url"]; if (!url.length) continue;
+            NSString *url = item[@"url"]; if (!url.length || [deletedPresets containsObject:url]) continue;
             NSString *action = [@"customURL:" stringByAppendingString:url];
             [specs addObject:ABMCRow(item[@"title"] ?: url, action, self, ABMCIconForAction(action, item[@"icon"]))];
         }
@@ -363,23 +357,76 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
     PSSpecifier *specifier = [self specifierAtIndexPath:path];
     NSString *actionID = [specifier propertyForKey:@"actionID"];
     UIImage *image = [specifier propertyForKey:@"iconImage"];
-    if (image) cell.imageView.image = image;
+    if (image) { cell.imageView.image = image; cell.imageView.contentMode = UIViewContentModeScaleAspectFit; cell.imageView.bounds = CGRectMake(0, 0, 31, 31); }
     if ([actionID isEqualToString:@"__selected__"]) actionID = _currentValue;
-    if (_editingMode && actionID.length && ![actionID hasPrefix:@"category:"] && ![actionID isEqualToString:@"__test__"]) cell.accessoryType = UITableViewCellAccessoryDetailButton;
-    else if (actionID.length && [_currentValue isEqualToString:actionID]) cell.accessoryType = UITableViewCellAccessoryCheckmark;
-    else if ([actionID hasPrefix:@"category:"] || [actionID isEqualToString:@"customURL"] || [actionID isEqualToString:@"customCommand"]) cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    if (actionID.length && [_currentValue isEqualToString:actionID]) cell.accessoryType = UITableViewCellAccessoryCheckmark;
+    else if ([actionID hasPrefix:@"category:"] || [actionID isEqualToString:@"customURL"] || [actionID isEqualToString:@"customCommand"] || [actionID isEqualToString:@"newPreset"]) cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     else cell.accessoryType = UITableViewCellAccessoryNone;
     return cell;
+}
+
+- (UISwipeActionsConfiguration *)tableView:(UITableView *)tableView trailingSwipeActionsConfigurationForRowAtIndexPath:(NSIndexPath *)indexPath {
+    PSSpecifier *specifier = [self specifierAtIndexPath:indexPath];
+    NSString *rowID = [specifier propertyForKey:@"actionID"];
+    NSString *actionID = [rowID isEqualToString:@"__selected__"] ? _currentValue : rowID;
+    if (!actionID.length || [actionID hasPrefix:@"category:"] || [@[@"__test__", @"customURL", @"customCommand", @"newPreset", @"none"] containsObject:actionID]) return nil;
+    __weak typeof(self) weakSelf = self;
+    UIContextualAction *edit = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal title:@"修改" handler:^(__unused UIContextualAction *unused, __unused UIView *source, void (^done)(BOOL)) {
+        if ([actionID hasPrefix:@"customURL:"]) [weakSelf openLinkEditorForActionID:actionID];
+        else [weakSelf promptEditActionID:actionID];
+        done(YES);
+    }];
+    edit.backgroundColor = [UIColor systemBlueColor];
+    BOOL allowDelete = [rowID isEqualToString:@"__selected__"] || [_category isEqualToString:@"links"] || [_category isEqualToString:@"presets"];
+    NSArray *actions = allowDelete ? @[[UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive title:@"删除" handler:^(__unused UIContextualAction *unused, __unused UIView *source, void (^done)(BOOL)) { [weakSelf confirmDeleteActionID:actionID]; done(YES); }], edit] : @[edit];
+    UISwipeActionsConfiguration *configuration = [UISwipeActionsConfiguration configurationWithActions:actions];
+    configuration.performsFirstActionWithFullSwipe = NO;
+    return configuration;
+}
+
+- (NSString *)linkStorageKeyForURL:(NSString *)url {
+    if (!url.length) return @"customLinks";
+    for (NSString *key in @[@"presetLinks", @"customLinks"]) {
+        CFPropertyListRef raw = ABMCRead((__bridge CFStringRef)key);
+        NSArray *items = raw ? (__bridge_transfer NSArray *)raw : @[];
+        for (NSDictionary *item in [items isKindOfClass:[NSArray class]] ? items : @[]) if ([item[@"url"] isEqual:url]) return key;
+    }
+    return [_category isEqualToString:@"presets"] ? @"presetLinks" : @"customLinks";
+}
+
+- (void)openLinkEditorForActionID:(NSString *)actionID {
+    NSString *url = [actionID hasPrefix:@"customURL:"] ? [actionID substringFromIndex:10] : nil;
+    if (!url.length) return;
+    [self.navigationController pushViewController:[[ABMCLinkEditorController alloc] initWithPreferenceKey:[self linkStorageKeyForURL:url] existingURL:url] animated:YES];
+}
+
+- (void)promptEditActionID:(NSString *)actionID {
+    if (!actionID.length || [actionID isEqualToString:@"none"]) return;
+    NSDictionary *metadata = ABMCMetadata(actionID);
+    NSString *currentTitle = ABMCActionTitle(actionID);
+    NSString *currentIcon = [metadata[@"icon"] isKindOfClass:[NSString class]] ? metadata[@"icon"] : @"";
+    UIAlertController *alert = [UIAlertController alertControllerWithTitle:@"修改动作" message:@"图标栏同时支持 SF Symbols 名称或应用 Bundle ID；填入 Bundle ID 时自动显示该应用图标。" preferredStyle:UIAlertControllerStyleAlert];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) { field.placeholder = @"标题"; field.text = currentTitle; }];
+    [alert addTextFieldWithConfigurationHandler:^(UITextField *field) { field.placeholder = @"SF 符号或应用 Bundle ID"; field.text = currentIcon; field.autocapitalizationType = UITextAutocapitalizationTypeNone; field.autocorrectionType = UITextAutocorrectionTypeNo; }];
+    [alert addAction:[UIAlertAction actionWithTitle:@"取消" style:UIAlertActionStyleCancel handler:nil]];
+    [alert addAction:[UIAlertAction actionWithTitle:@"保存" style:UIAlertActionStyleDefault handler:^(__unused UIAlertAction *unused) {
+        NSString *title = [alert.textFields[0].text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        NSString *icon = [alert.textFields[1].text stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+        if (!title.length) return;
+        ABMCSetMetadata(actionID, title, icon, nil);
+        ABMCLog(@"Action metadata edited id=%@ title=%@ icon=%@", actionID, title, icon);
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), (__bridge CFStringRef)PREFS_NOTIFICATION, NULL, NULL, YES);
+        self->_specifiers = nil;
+        [self reloadSpecifiers];
+    }]];
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 - (void)selectAction:(PSSpecifier *)specifier {
     NSString *actionID = [specifier propertyForKey:@"actionID"];
     if (!actionID.length) return;
-    ABMCLog(@"Action row tapped gesture=%@ category=%@ id=%@ editing=%@", [self gestureTitle], _category ?: @"root", actionID, _editingMode ? @"yes" : @"no");
+    ABMCLog(@"Action row tapped gesture=%@ category=%@ id=%@", [self gestureTitle], _category ?: @"root", actionID);
     if ([actionID isEqualToString:@"__selected__"]) {
-        NSString *selectedID = _currentValue;
-        if (_editingMode && selectedID.length && ![selectedID isEqualToString:@"none"]) [self confirmDeleteActionID:selectedID];
-        else if (selectedID.length && ![selectedID isEqualToString:@"none"]) [self editActionID:selectedID];
         return;
     }
     if ([actionID isEqualToString:@"__test__"]) {
@@ -394,21 +441,10 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
         [self.navigationController pushViewController:child animated:YES]; return;
     }
     if ([actionID isEqualToString:@"newPreset"]) { [self.navigationController pushViewController:[[ABMCLinkEditorController alloc] initWithPreferenceKey:@"presetLinks" existingURL:nil] animated:YES]; return; }
-    if (_editingMode) { [self confirmDeleteActionID:actionID]; return; }
     if ([actionID isEqualToString:@"customCommand"]) { [self promptForValueWithTitle:@"快捷指令" prefix:@"shortcut:"]; return; }
     if ([actionID isEqualToString:@"customURL"]) { [self.navigationController pushViewController:[[ABMCLinkEditorController alloc] initWithPreferenceKey:_prefKey existingURL:nil] animated:YES]; return; }
     NSString *appName = [specifier propertyForKey:@"appName"];
     [self saveAction:actionID title:nil icon:nil appName:appName];
-}
-
-- (void)editActionID:(NSString *)actionID {
-    if ([actionID hasPrefix:@"customURL:"]) {
-        NSString *url = [actionID substringFromIndex:10];
-        NSString *storageKey = [_category isEqualToString:@"presets"] ? @"presetLinks" : _prefKey;
-        [self.navigationController pushViewController:[[ABMCLinkEditorController alloc] initWithPreferenceKey:storageKey existingURL:url] animated:YES];
-    } else {
-        [self.navigationController pushViewController:[[ABMCActionEditorController alloc] initWithPreferenceKey:_prefKey actionID:actionID] animated:YES];
-    }
 }
 
 - (void)confirmDeleteActionID:(NSString *)actionID {
@@ -447,9 +483,7 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
 }
 
 - (void)tableView:(UITableView *)tableView accessoryButtonTappedForRowWithIndexPath:(NSIndexPath *)indexPath {
-    PSSpecifier *specifier = [self specifierAtIndexPath:indexPath];
-    NSString *actionID = [specifier propertyForKey:@"actionID"];
-    if (actionID.length && ![actionID hasPrefix:@"category:"] && ![actionID isEqualToString:@"__test__"] && ![actionID isEqualToString:@"customURL"] && ![actionID isEqualToString:@"customCommand"]) [self editActionID:[actionID isEqualToString:@"__selected__"] ? _currentValue : actionID];
+    return;
 }
 
 - (void)promptForValueWithTitle:(NSString *)title prefix:(NSString *)prefix {
