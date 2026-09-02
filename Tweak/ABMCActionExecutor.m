@@ -11,11 +11,6 @@ static CFPropertyListRef ABMCReadPreference(CFStringRef key) {
     return CFPreferencesCopyValue(key, PREFS_DOMAIN, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
 }
 
-static void ABMCClearPreference(CFStringRef key) {
-    CFPreferencesSetValue(key, NULL, PREFS_DOMAIN, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-    CFPreferencesSynchronize(PREFS_DOMAIN, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
-}
-
 BOOL ABMCPerformingDefaultAction = NO;
 
 @interface ABMCActionExecutor ()
