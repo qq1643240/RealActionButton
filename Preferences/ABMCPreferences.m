@@ -4,6 +4,10 @@
 
 #define PREFS_DOMAIN @"com.huynguyen.actionbuttonmulticlick"
 
+static CFStringRef ABMCPreferenceDomain(void) {
+    return (__bridge CFStringRef)PREFS_DOMAIN;
+}
+
 static NSString *titleForActionID(NSString *actionID) {
     if (!actionID || [actionID isEqualToString:@"none"]) return @"关闭";
     if ([actionID isEqualToString:@"default"]) return @"默认";
@@ -12,14 +16,14 @@ static NSString *titleForActionID(NSString *actionID) {
     if ([actionID isEqualToString:@"silent"]) return @"静音";
     if ([actionID isEqualToString:@"screenshot"]) return @"截屏";
     if ([actionID isEqualToString:@"lock"]) return @"锁屏";
-    if ([actionID isEqualToString:@"controlCenter"]) return @"控中";
-    if ([actionID isEqualToString:@"notificationCenter"]) return @"通知";
+    if ([actionID isEqualToString:@"controlCenter"]) return @"控制中心";
+    if ([actionID isEqualToString:@"notificationCenter"]) return @"通知中心";
     if ([actionID isEqualToString:@"spotlight"]) return @"聚焦";
-    if ([actionID isEqualToString:@"screenRecord"]) return @"录屏";
-    if ([actionID isEqualToString:@"mediaPlayPause"]) return @"播放";
-    if ([actionID isEqualToString:@"mediaPrevious"]) return @"上曲";
-    if ([actionID isEqualToString:@"mediaNext"]) return @"下曲";
-    if ([actionID isEqualToString:@"closeApps"]) return @"关应";
+    if ([actionID isEqualToString:@"screenRecord"]) return @"屏幕录制";
+    if ([actionID isEqualToString:@"mediaPlayPause"]) return @"播放暂停";
+    if ([actionID isEqualToString:@"mediaPrevious"]) return @"上一首";
+    if ([actionID isEqualToString:@"mediaNext"]) return @"下一首";
+    if ([actionID isEqualToString:@"closeApps"]) return @"关闭应用";
     if ([actionID isEqualToString:@"respring"]) return @"重启";
     if ([actionID isEqualToString:@"url:weixin://scanqrcode"] || [actionID isEqualToString:@"customURL:weixin://scanqrcode"]) return @"微信扫一扫";
     if ([actionID isEqualToString:@"url:weixin://widget/pay"] || [actionID isEqualToString:@"customURL:weixin://widget/pay"]) return @"微信付款码";
@@ -58,8 +62,7 @@ static NSString *titleForActionID(NSString *actionID) {
     for (PSSpecifier *spec in _specifiers) {
         NSString *key = [spec propertyForKey:@"key"];
         if ([key hasSuffix:@"Action"]) {
-            CFPreferencesAppSynchronize((__bridge CFStringRef)PREFS_DOMAIN);
-            CFStringRef value = (CFStringRef)CFPreferencesCopyAppValue((__bridge CFStringRef)key, (__bridge CFStringRef)PREFS_DOMAIN);
+            CFStringRef value = (CFStringRef)CFPreferencesCopyValue((__bridge CFStringRef)key, (__bridge CFStringRef)PREFS_DOMAIN, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
             NSString *actionID = value ? (__bridge_transfer NSString *)value : [spec propertyForKey:@"default"];
             [spec setProperty:titleForActionID(actionID) forKey:@"cellValue"];
         }

@@ -6,11 +6,16 @@
 
 #define PREFS_DOMAIN CFSTR("com.huynguyen.actionbuttonmulticlick")
 
+static CFPropertyListRef ABMCReadPreference(CFStringRef key) {
+    return CFPreferencesCopyValue(key, PREFS_DOMAIN, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+}
+
 BOOL ABMCPerformingDefaultAction = NO;
 
 @interface ABMCActionExecutor ()
 - (void)openURLString:(NSString *)urlString;
 - (void)openConfiguredURL:(NSString *)urlString;
+- (void)executeAppShortcut:(NSString *)payload;
 - (void)invokeSystemAction:(NSString *)selectorName;
 - (void)invokeMediaSelector:(NSString *)selectorName;
 - (void)invokeMediaSelector:(NSString *)selectorName argument:(id)argument;
@@ -39,11 +44,9 @@ BOOL ABMCPerformingDefaultAction = NO;
 }
 
 - (void)reloadPreferences {
-    CFPreferencesAppSynchronize(PREFS_DOMAIN);
-
-    CFStringRef single = (CFStringRef)CFPreferencesCopyAppValue(CFSTR("singleClickAction"), PREFS_DOMAIN);
-    CFStringRef dbl = (CFStringRef)CFPreferencesCopyAppValue(CFSTR("doubleClickAction"), PREFS_DOMAIN);
-    CFStringRef longPress = (CFStringRef)CFPreferencesCopyAppValue(CFSTR("longPressAction"), PREFS_DOMAIN);
+    CFStringRef single = (CFStringRef)ABMCReadPreference(CFSTR("singleClickAction"));
+    CFStringRef dbl = (CFStringRef)ABMCReadPreference(CFSTR("doubleClickAction"));
+    CFStringRef longPress = (CFStringRef)ABMCReadPreference(CFSTR("longPressAction"));
 
     _singleAction = single ? (__bridge_transfer NSString *)single : @"default";
     _doubleAction = dbl ? (__bridge_transfer NSString *)dbl : @"none";
@@ -106,6 +109,8 @@ BOOL ABMCPerformingDefaultAction = NO;
         [self invokeSystemAction:@"_dismissSwitcherIfNecessary"];
     } else if ([actionID hasPrefix:@"app:"]) {
         [self openApp:[actionID substringFromIndex:4]];
+    } else if ([actionID hasPrefix:@"appshortcut:"]) {
+        [self executeAppShortcut:[actionID substringFromIndex:12]];
     } else if ([actionID hasPrefix:@"shortcut:"]) {
         [self runShortcut:[actionID substringFromIndex:9]];
     } else if ([actionID hasPrefix:@"url:"]) {
@@ -410,6 +415,34 @@ BOOL ABMCPerformingDefaultAction = NO;
         while (presenter.presentedViewController) presenter = presenter.presentedViewController;
         [presenter presentViewController:alert animated:YES completion:nil];
     });
+}
+
+- (void)executeAppShortcut:(NSString *)payload {
+    NSArray *parts = [payload componentsSeparatedByString:@"|"];
+    if (parts.count < 2) return;
+    NSString *bundleID = parts[0];
+    NSString *type = parts[1];
+    if (!bundleID.length || !type.length) return;
+    @try {
+        Class itemClass = NSClassFromString(@"SBSApplicationShortcutItem");
+        id item = nil;
+        SEL initSel = NSSelectorFromString(@"initWithType:localizedTitle:localizedSubtitle:icon:userInfo:");
+        if (itemClass && [itemClass instancesRespondToSelector:initSel]) {
+            NSString *title = parts.count > 2 ? parts[2] : type;
+            item = ((id (*)(id, SEL, id, id, id, id, id))objc_msgSend)([itemClass alloc], initSel, type, title, nil, nil, nil);
+        }
+        Class storeClass = NSClassFromString(@"SBApplicationShortcutStore");
+        SEL sharedSel = NSSelectorFromString(@"sharedInstance");
+        id store = storeClass && [storeClass respondsToSelector:sharedSel] ? ((id (*)(id, SEL))objc_msgSend)(storeClass, sharedSel) : nil;
+        for (NSString *name in @[@"activateShortcutItem:forBundleIdentifier:", @"activateShortcutItem:forApplication:"]) {
+            SEL selector = NSSelectorFromString(name);
+            if (item && store && [store respondsToSelector:selector]) {
+                ((void (*)(id, SEL, id, id))objc_msgSend)(store, selector, item, bundleID);
+                return;
+            }
+        }
+    } @catch (NSException *exception) {}
+    [self openApp:bundleID];
 }
 
 #pragma mark - Run Shortcut
