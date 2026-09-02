@@ -95,7 +95,7 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target) {
         NSString *bid=ABMCString(app,@"bundleIdentifier"); NSString *name=ABMCString(app,@"localizedName"); NSString *type=ABMCString(app,@"applicationType");
         id bundleURL=app && [app respondsToSelector:NSSelectorFromString(@"bundleURL")] ? ((id(*)(id,SEL))objc_msgSend)(app,NSSelectorFromString(@"bundleURL")) : nil;
         NSString *path=[bundleURL respondsToSelector:@selector(path)] ? [bundleURL path] : @"";
-        BOOL user=[type isEqualToString:@"User"] || [app respondsToSelector:NSSelectorFromString(@"isUserApplication")] && ((BOOL(*)(id,SEL))objc_msgSend)(app,NSSelectorFromString(@"isUserApplication"));
+        BOOL user = [type isEqualToString:@"User"] || ([app respondsToSelector:NSSelectorFromString(@"isUserApplication")] && ((BOOL(*)(id,SEL))objc_msgSend)(app, NSSelectorFromString(@"isUserApplication")));
         BOOL jailbreak=[path hasPrefix:@"/var/jb/"];
         if (!bid.length || !name.length || [seen containsObject:bid] || (!user && !jailbreak)) continue;
         [seen addObject:bid]; [result addObject:@{@"name":name,@"bundle":bid,@"proxy":app}];

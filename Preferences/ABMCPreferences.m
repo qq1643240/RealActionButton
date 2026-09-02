@@ -4,10 +4,6 @@
 
 #define PREFS_DOMAIN @"com.huynguyen.actionbuttonmulticlick"
 
-static CFStringRef ABMCPreferenceDomain(void) {
-    return (__bridge CFStringRef)PREFS_DOMAIN;
-}
-
 static NSString *titleForActionID(NSString *actionID) {
     if (!actionID || [actionID isEqualToString:@"none"]) return @"关闭";
     if ([actionID isEqualToString:@"default"]) return @"默认";
