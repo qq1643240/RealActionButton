@@ -1,4 +1,5 @@
 #import "ABMCClickManager.h"
+#import "../ABMCLogger.h"
 
 static const uint64_t kABMCClickWindow = 240 * NSEC_PER_MSEC;
 
@@ -29,6 +30,7 @@ static const uint64_t kABMCClickWindow = 240 * NSEC_PER_MSEC;
     dispatch_async(_queue, ^{
         [self _cancelTimer];
         self->_clickCount++;
+        ABMCLog(@"Button click registered count=%ld", (long)self->_clickCount);
 
         if (self->_clickCount >= 2) {
             // Double click detected — fire immediately
@@ -71,6 +73,7 @@ static const uint64_t kABMCClickWindow = 240 * NSEC_PER_MSEC;
 
 - (void)_fireCallbackForCount:(NSInteger)count {
     if (count < 1 || count > 2) return;
+    ABMCLog(@"Button click classification fired count=%ld", (long)count);
     ABMCClickType type = (ABMCClickType)count;
     if (self.clickCallback) {
         dispatch_async(dispatch_get_main_queue(), ^{

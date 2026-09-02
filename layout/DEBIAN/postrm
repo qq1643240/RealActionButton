@@ -1,0 +1,4 @@
+#!/bin/sh
+# Remove diagnostics when the package is removed or purged.
+rm -f /rootfs/var/tmp/RealActionButton.log /var/tmp/RealActionButton.log
+exit 0

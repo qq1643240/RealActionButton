@@ -3,11 +3,17 @@
 #import <AVFoundation/AVFoundation.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
+#import "../ABMCLogger.h"
 
 #define PREFS_DOMAIN CFSTR("com.huynguyen.actionbuttonmulticlick")
 
 static CFPropertyListRef ABMCReadPreference(CFStringRef key) {
     return CFPreferencesCopyValue(key, PREFS_DOMAIN, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+}
+
+static void ABMCClearPreference(CFStringRef key) {
+    CFPreferencesSetValue(key, NULL, PREFS_DOMAIN, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+    CFPreferencesSynchronize(PREFS_DOMAIN, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
 }
 
 BOOL ABMCPerformingDefaultAction = NO;
@@ -51,6 +57,7 @@ BOOL ABMCPerformingDefaultAction = NO;
     _singleAction = single ? (__bridge_transfer NSString *)single : @"default";
     _doubleAction = dbl ? (__bridge_transfer NSString *)dbl : @"none";
     _longPressAction = longPress ? (__bridge_transfer NSString *)longPress : @"default";
+    ABMCLog(@"SpringBoard preferences loaded single=%@ double=%@ long=%@", _singleAction, _doubleAction, _longPressAction);
 }
 
 - (NSString *)actionForClickCount:(NSInteger)count {
@@ -63,6 +70,7 @@ BOOL ABMCPerformingDefaultAction = NO;
 
 - (void)executeActionForClickType:(NSInteger)clickType {
     NSString *action = [self actionForClickCount:clickType];
+    ABMCLog(@"Click resolved count=%ld action=%@", (long)clickType, action ?: @"(nil)");
     [self executeAction:action];
 }
 
@@ -71,11 +79,16 @@ BOOL ABMCPerformingDefaultAction = NO;
 }
 
 - (void)executeLongPressAction {
+    ABMCLog(@"Long press resolved action=%@", _longPressAction ?: @"(nil)");
     [self executeAction:_longPressAction];
 }
 
 - (void)executeAction:(NSString *)actionID {
-    if (!actionID || [actionID isEqualToString:@"none"]) return;
+    ABMCLog(@"Action execution requested id=%@", actionID ?: @"(nil)");
+    if (!actionID || [actionID isEqualToString:@"none"]) {
+        ABMCLog(@"Action execution skipped: disabled or empty");
+        return;
+    }
 
     if ([actionID isEqualToString:@"default"]) {
         [self performDefaultAction];

@@ -1,5 +1,6 @@
 #import "ABMCClickManager.h"
 #import "ABMCActionExecutor.h"
+#import "../ABMCLogger.h"
 #import <objc/runtime.h>
 #import <objc/message.h>
 
@@ -19,7 +20,17 @@ static void disableArbiterMultiClick(id buttonInstance) {
 }
 
 static void prefsChanged(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
-    [[ABMCActionExecutor sharedExecutor] reloadPreferences];
+    ABMCLog(@"SpringBoard received preferences change notification");
+    ABMCActionExecutor *executor = [ABMCActionExecutor sharedExecutor];
+    [executor reloadPreferences];
+    CFPropertyListRef rawTest = CFPreferencesCopyValue(CFSTR("testAction"), CFSTR("com.huynguyen.actionbuttonmulticlick"), kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+    NSString *testAction = rawTest ? (__bridge_transfer NSString *)rawTest : nil;
+    if (testAction.length) {
+        CFPreferencesSetValue(CFSTR("testAction"), NULL, CFSTR("com.huynguyen.actionbuttonmulticlick"), kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+        CFPreferencesSynchronize(CFSTR("com.huynguyen.actionbuttonmulticlick"), kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+        ABMCLog(@"SpringBoard executing requested settings test action=%@", testAction);
+        [executor executeAction:testAction];
+    }
 }
 
 // iOS 26+

@@ -3,6 +3,7 @@
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
 #import <dlfcn.h>
+#import "../ABMCLogger.h"
 
 #define PREFS_DOMAIN @"com.huynguyen.actionbuttonmulticlick"
 #define PREFS_NOTIFICATION @"com.huynguyen.actionbuttonmulticlick/prefsChanged"
@@ -33,6 +34,7 @@ static NSString *ABMCActionTitle(NSString *actionID) {
 static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target) {
     PSSpecifier *spec=[PSSpecifier preferenceSpecifierNamed:title target:target set:NULL get:NULL detail:Nil cell:PSLinkCell edit:Nil];
     [spec setProperty:actionID forKey:@"actionID"];
+    spec->action = @selector(selectAction:);
     return spec;
 }
 
@@ -81,6 +83,7 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target) {
     [super viewDidLoad];
     if (!_prefKey.length) { PSSpecifier *parent=[self specifier]; _prefKey=[[parent propertyForKey:@"key"] copy]; _category=[[parent propertyForKey:@"category"] copy]; [self loadCurrentValueWithFallback:[parent propertyForKey:@"default"] ?: @"none"]; }
     self.title=_category.length ? [self categoryTitle] : @"选择动作";
+    ABMCLog(@"Preferences selector opened key=%@ category=%@ current=%@", _prefKey ?: @"(nil)", _category ?: @"root", _currentValue ?: @"(nil)");
     if ([_category isEqualToString:@"links"]) [self.table addGestureRecognizer:[[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(handleLinkLongPress:)]];
 }
 
@@ -156,6 +159,8 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target) {
     if (!_category.length) {
         [specs addObject:[PSSpecifier groupSpecifierWithName:@"已选择动作"]];
         [specs addObject:ABMCRow([_currentValue isEqualToString:@"none"] ? @"未选择" : ABMCActionTitle(_currentValue),@"__selected__",self)];
+        [specs addObject:[PSSpecifier groupSpecifierWithName:@"动作测试"]];
+        [specs addObject:ABMCRow(@"立即测试当前动作",@"__test__",self)];
         [specs addObject:[PSSpecifier groupSpecifierWithName:@"选择动作分组"]];
         for (NSArray *item in @[@[@"基础动作",@"category:basic"],@[@"应用列表",@"category:apps"],@[@"应用快捷方式",@"category:shortcuts"],@[@"快捷指令",@"category:commands"],@[@"自定义链接",@"category:links"],@[@"系统预设",@"category:presets"]]) [specs addObject:ABMCRow(item[0],item[1],self)];
     } else if ([_category isEqualToString:@"basic"]) {
@@ -188,15 +193,25 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target) {
 
 - (UITableViewCell *)tableView:(UITableView *)tableView cellForRowAtIndexPath:(NSIndexPath *)path { UITableViewCell *cell=[super tableView:tableView cellForRowAtIndexPath:path]; NSString *actionID=[[self specifierAtIndexPath:path] propertyForKey:@"actionID"]; cell.accessoryType=actionID.length && ![actionID hasPrefix:@"category:"] && ![actionID isEqualToString:@"__selected__"] && [_currentValue isEqualToString:actionID] ? UITableViewCellAccessoryCheckmark : UITableViewCellAccessoryDisclosureIndicator; return cell; }
 
-- (void)tableView:(UITableView *)tableView didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];
-    PSSpecifier *specifier = [self specifierAtIndexPath:indexPath];
-    if ([specifier propertyForKey:@"actionID"]) [self selectAction:specifier];
-}
-
 - (void)selectAction:(PSSpecifier *)specifier {
-    NSString *actionID=[specifier propertyForKey:@"actionID"]; if (!actionID.length || [actionID isEqualToString:@"__selected__"]) return;
-    if ([actionID hasPrefix:@"category:"]) { ABMCActionListController *child=[[ABMCActionListController alloc] initWithPreferenceKey:_prefKey category:[actionID substringFromIndex:9]]; [self.navigationController pushViewController:child animated:YES]; return; }
+    NSString *actionID=[specifier propertyForKey:@"actionID"];
+    ABMCLog(@"Preferences row selected key=%@ category=%@ action=%@", _prefKey ?: @"(nil)", _category ?: @"root", actionID ?: @"(nil)");
+    if (!actionID.length || [actionID isEqualToString:@"__selected__"]) return;
+    if ([actionID isEqualToString:@"__test__"]) {
+        if (!_currentValue.length || [_currentValue isEqualToString:@"none"]) {
+            ABMCLog(@"Preferences test skipped: no enabled action");
+            return;
+        }
+        ABMCWrite(CFSTR("testAction"), (__bridge CFPropertyListRef)_currentValue);
+        ABMCLog(@"Preferences requested immediate test action=%@", _currentValue);
+        CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), (__bridge CFStringRef)PREFS_NOTIFICATION, NULL, NULL, YES);
+        return;
+    }
+    if ([actionID hasPrefix:@"category:"]) {
+        ABMCActionListController *child=[[ABMCActionListController alloc] initWithPreferenceKey:_prefKey category:[actionID substringFromIndex:9]];
+        [self.navigationController pushViewController:child animated:YES];
+        return;
+    }
     if ([actionID isEqualToString:@"customCommand"]) { [self promptForValueWithTitle:@"快捷指令" prefix:@"shortcut:"]; return; }
     if ([actionID isEqualToString:@"customURL"]) { [self promptForURLWithCurrent:nil existingActionID:nil]; return; }
     [self saveAction:actionID];
@@ -223,5 +238,18 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target) {
     ABMCWrite(CFSTR("customLinks"), (__bridge CFPropertyListRef)links);
     [self saveAction:[@"customURL:" stringByAppendingString:url]];
 }
-- (void)saveAction:(NSString *)actionID { if (!_prefKey.length || !actionID.length) return; _currentValue=[actionID copy]; ABMCWrite((__bridge CFStringRef)_prefKey,(__bridge CFPropertyListRef)actionID); CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),(__bridge CFStringRef)PREFS_NOTIFICATION,NULL,NULL,YES); if(_category.length)[self.navigationController popViewControllerAnimated:YES];else{_specifiers=nil;[self reloadSpecifiers];} }
+- (void)saveAction:(NSString *)actionID {
+    if (!_prefKey.length || !actionID.length) {
+        ABMCLog(@"Preferences save rejected key=%@ action=%@", _prefKey ?: @"(nil)", actionID ?: @"(nil)");
+        return;
+    }
+    _currentValue=[actionID copy];
+    ABMCWrite((__bridge CFStringRef)_prefKey,(__bridge CFPropertyListRef)actionID);
+    CFPropertyListRef saved = ABMCRead((__bridge CFStringRef)_prefKey);
+    NSString *confirmed = saved ? (__bridge_transfer NSString *)saved : nil;
+    ABMCLog(@"Preferences saved key=%@ action=%@ confirmed=%@", _prefKey, actionID, confirmed ?: @"(nil)");
+    CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(),(__bridge CFStringRef)PREFS_NOTIFICATION,NULL,NULL,YES);
+    if(_category.length)[self.navigationController popViewControllerAnimated:YES];
+    else{_specifiers=nil;[self reloadSpecifiers];}
+}
 @end
