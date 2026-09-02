@@ -423,10 +423,6 @@ BOOL ABMCPerformingDefaultAction = NO;
 
 - (void)openConfiguredURL:(NSString *)urlString {
     if (!urlString.length) return;
-    CFPropertyListRef rawLinks = ABMCReadPreference(CFSTR("customLinks"));
-    NSArray *links = rawLinks ? (__bridge_transfer NSArray *)rawLinks : @[];
-    NSDictionary *configuration = nil;
-    for (NSDictionary *entry in [links isKindOfClass:[NSArray class]] ? links : @[]) if ([entry[@"url"] isEqual:urlString]) { configuration = entry; break; }
     NSString *clipboard = [UIPasteboard generalPasteboard].string ?: @"";
     BOOL needsClipboardInput = [urlString containsString:@"$$$"] && !clipboard.length;
     BOOL needsKeywordInput = [urlString containsString:@"@@@"];
