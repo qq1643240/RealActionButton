@@ -6,6 +6,7 @@
 #import <sqlite3.h>
 #import <SpringBoardServices/SpringBoardServices.h>
 #import "../ABMCLogger.h"
+#import "ABMCLinkEditorController.h"
 
 #define PREFS_DOMAIN @"com.huynguyen.actionbuttonmulticlick"
 #define PREFS_NOTIFICATION @"com.huynguyen.actionbuttonmulticlick/prefsChanged"
@@ -37,6 +38,12 @@ static void ABMCSetMetadata(NSString *actionID, NSString *title, NSString *icon,
     all[actionID] = entry;
     ABMCWrite(CFSTR("actionMetadata"), (__bridge CFPropertyListRef)all);
 }
+static BOOL ABMCBuiltInURL(NSString *url) {
+    if ([url hasPrefix:@"url:"]) url = [url substringFromIndex:4];
+    if ([url hasPrefix:@"customURL:"]) url = [url substringFromIndex:10];
+    return [@[@"weixin://scanqrcode", @"weixin://widget/pay", @"alipay://platformapi/startapp?appId=10000007", @"alipay://platformapi/startapp?appId=20000056"] containsObject:url];
+}
+
 static NSArray *ABMCShortcutNamesFromDatabase(NSString *path) {
     if (![[NSFileManager defaultManager] fileExistsAtPath:path]) return @[];
     sqlite3 *database = NULL;
@@ -70,6 +77,29 @@ static NSArray *ABMCShortcutNamesFromDatabase(NSString *path) {
     sqlite3_close(database);
     return names.array;
 }
+static NSArray *ABMCWorkflowItemsFromDatabase(NSString *path) {
+    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) return @[];
+    sqlite3 *database = NULL;
+    if (sqlite3_open_v2(path.UTF8String, &database, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) { if (database) sqlite3_close(database); return @[]; }
+    NSMutableArray *items = [NSMutableArray array];
+    NSArray *queries = @[@"SELECT ZNAME, ZIDENTIFIER FROM ZWORKFLOW WHERE ZNAME IS NOT NULL AND ZIDENTIFIER IS NOT NULL", @"SELECT name, identifier FROM workflows WHERE name IS NOT NULL AND identifier IS NOT NULL", @"SELECT title, identifier FROM shortcuts WHERE title IS NOT NULL AND identifier IS NOT NULL"];
+    for (NSString *sql in queries) {
+        sqlite3_stmt *statement = NULL;
+        if (sqlite3_prepare_v2(database, sql.UTF8String, -1, &statement, NULL) != SQLITE_OK) continue;
+        while (sqlite3_step(statement) == SQLITE_ROW) {
+            const unsigned char *rawName = sqlite3_column_text(statement, 0);
+            const unsigned char *rawIdentifier = sqlite3_column_text(statement, 1);
+            NSString *name = rawName ? [NSString stringWithUTF8String:(const char *)rawName] : nil;
+            NSString *identifier = rawIdentifier ? [NSString stringWithUTF8String:(const char *)rawIdentifier] : nil;
+            if (name.length && identifier.length) [items addObject:@{@"title":name, @"identifier":identifier}];
+        }
+        sqlite3_finalize(statement);
+        if (items.count) break;
+    }
+    sqlite3_close(database);
+    return items;
+}
+
 static NSString *ABMCLocalizedShortcutTitle(NSString *title, NSString *path) {
     if (!title.length || !path.length) return title;
     NSBundle *bundle = [NSBundle bundleWithPath:path];
@@ -135,7 +165,8 @@ static UIImage *ABMCIconForAction(NSString *actionID, NSString *fallbackBundle) 
         if (appIcon) return appIcon;
     }
     if ([actionID hasPrefix:@"app:"] || [actionID hasPrefix:@"appshortcut:"]) return [UIImage systemImageNamed:@"app.fill"];
-    if ([actionID hasPrefix:@"shortcut:"]) return [UIImage systemImageNamed:@"bolt.circle.fill"];
+    if ([actionID hasPrefix:@"shortcut:"] || [actionID hasPrefix:@"shortcutuuid:"]) return [UIImage systemImageNamed:@"bolt.circle.fill"];
+    if ([actionID hasPrefix:@"customURL:"]) return [UIImage systemImageNamed:@"safari.fill"];
     NSDictionary *symbols = @{@"default":@"hand.tap", @"flashlight":@"flashlight.on.fill", @"camera":@"camera.fill", @"silent":@"speaker.slash.fill", @"screenshot":@"camera.viewfinder", @"lock":@"lock.fill", @"respring":@"arrow.clockwise", @"controlCenter":@"switch.2", @"notificationCenter":@"bell.fill", @"spotlight":@"magnifyingglass", @"screenRecord":@"record.circle", @"mediaPlayPause":@"playpause.fill", @"mediaPrevious":@"backward.fill", @"mediaNext":@"forward.fill", @"closeApps":@"rectangle.stack.fill", @"url:weixin://scanqrcode":@"qrcode.viewfinder", @"url:weixin://widget/pay":@"creditcard.fill", @"url:alipay://platformapi/startapp?appId=10000007":@"qrcode.viewfinder", @"url:alipay://platformapi/startapp?appId=20000056":@"creditcard.fill", @"none":@"nosign"};
     NSString *symbolName = symbols[actionID] ?: @"hand.tap";
     return [UIImage respondsToSelector:@selector(systemImageNamed:)] ? [UIImage systemImageNamed:symbolName] : nil;
@@ -147,8 +178,22 @@ static NSString *ABMCActionTitle(NSString *actionID) {
     NSDictionary *titles = @{@"default":@"系统默认", @"flashlight":@"切换手电筒", @"camera":@"打开相机", @"silent":@"切换静音模式", @"screenshot":@"截屏", @"lock":@"锁定设备", @"respring":@"注销弹簧板", @"controlCenter":@"控制中心", @"notificationCenter":@"通知中心", @"spotlight":@"聚焦搜索", @"screenRecord":@"屏幕录制", @"mediaPlayPause":@"播放暂停", @"mediaPrevious":@"上一首", @"mediaNext":@"下一首", @"closeApps":@"关闭应用", @"none":@"无操作", @"url:weixin://scanqrcode":@"微信扫一扫", @"url:weixin://widget/pay":@"微信付款码", @"url:alipay://platformapi/startapp?appId=10000007":@"支付宝扫码", @"url:alipay://platformapi/startapp?appId=20000056":@"支付宝付款"};
     if (titles[actionID]) return titles[actionID];
     if ([actionID hasPrefix:@"app:"]) return meta[@"appName"] ?: [actionID substringFromIndex:4];
+    if ([actionID hasPrefix:@"shortcutuuid:"]) { NSArray *parts = [[actionID substringFromIndex:13] componentsSeparatedByString:@"|"]; return parts.count > 1 ? parts[1] : @"快捷指令"; }
     if ([actionID hasPrefix:@"shortcut:"]) return [actionID substringFromIndex:9];
     if ([actionID hasPrefix:@"appshortcut:"]) { NSArray *parts = [[actionID substringFromIndex:12] componentsSeparatedByString:@"|"]; return parts.count > 2 ? parts[2] : @"快捷方式"; }
+    if ([actionID hasPrefix:@"customURL:"]) {
+        NSString *url = [actionID substringFromIndex:10];
+        for (NSString *key in @[@"customLinks", @"presetLinks"]) {
+            CFPropertyListRef raw = ABMCRead((__bridge CFStringRef)key);
+            NSArray *items = raw ? (__bridge_transfer NSArray *)raw : @[];
+            for (id object in [items isKindOfClass:[NSArray class]] ? items : @[]) {
+                if (![object isKindOfClass:[NSDictionary class]]) continue;
+                NSDictionary *link = object;
+                if ([link[@"url"] isEqual:url] && [link[@"title"] length]) return link[@"title"];
+            }
+        }
+        return @"自定义链接";
+    }
     return actionID.length ? actionID : @"关闭动作";
 }
 static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIImage *icon) {
@@ -163,9 +208,12 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
 - (void)loadCurrentValueWithFallback:(NSString *)fallback;
 - (NSArray *)userApplications;
 - (NSArray *)workflowNames;
+- (NSArray *)workflowItems;
 - (NSArray *)appShortcutGroups;
 - (void)deleteActionID:(NSString *)actionID;
 - (void)confirmDeleteActionID:(NSString *)actionID;
+- (NSString *)linkStorageKeyForURL:(NSString *)url;
+- (void)openLinkEditorForActionID:(NSString *)actionID;
 - (void)promptEditActionID:(NSString *)actionID;
 @end
 
@@ -194,7 +242,7 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
     return (@{@"singleClickAction":@"单击动作", @"doubleClickAction":@"双击动作", @"longPressAction":@"长按动作"}[_prefKey]) ?: @"动作选择";
 }
 - (NSString *)categoryTitle {
-    return (@{@"basic":@"基础动作", @"apps":@"应用打开", @"shortcuts":@"快捷方式", @"commands":@"快捷指令"}[_category]) ?: @"按钮动作";
+    return (@{@"basic":@"基础动作", @"apps":@"应用打开", @"shortcuts":@"快捷方式", @"commands":@"快捷指令", @"links":@"打开链接", @"presets":@"预设链接"}[_category]) ?: @"按钮动作";
 }
 - (void)viewDidLoad {
     [super viewDidLoad];
@@ -288,6 +336,15 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
     }
 }
 
+- (NSArray *)workflowItems {
+    NSMutableOrderedSet *items = [NSMutableOrderedSet orderedSet];
+    NSArray *paths = @[@"/var/mobile/Library/Shortcuts/Shortcuts.sqlite", @"/var/mobile/Library/Shortcuts/Shortcuts.db", @"/var/mobile/Library/Shortcuts/ShortcutsStore.sqlite", @"/var/mobile/Library/Shortcuts/ShortcutsStore.db", @"/private/var/mobile/Library/Shortcuts/Shortcuts.sqlite", @"/private/var/mobile/Library/Shortcuts/Shortcuts.db", @"/private/var/mobile/Library/Shortcuts/ShortcutsStore.sqlite", @"/private/var/mobile/Library/Shortcuts/ShortcutsStore.db"];
+    for (NSString *path in paths) for (NSDictionary *item in ABMCWorkflowItemsFromDatabase(path)) [items addObject:item];
+    NSArray *sorted = [items.array sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [a[@"title"] localizedCaseInsensitiveCompare:b[@"title"]]; }];
+    ABMCLog(@"Loaded workflow UUID items count=%lu", (unsigned long)sorted.count);
+    return sorted;
+}
+
 - (NSArray *)appShortcutGroups {
     @try {
         NSMutableArray *result = [NSMutableArray array];
@@ -339,7 +396,7 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
         [specs addObject:[PSSpecifier groupSpecifierWithName:@"动作测试"]];
         [specs addObject:ABMCRow(@"立即测试当前动作", @"__test__", self, nil)];
         [specs addObject:[PSSpecifier groupSpecifierWithName:@"选择动作分组"]];
-        NSArray *categories = @[@[@"基础动作", @"category:basic", @"hand.tap"], @[@"应用打开", @"category:apps", @"hand.point.up.left.fill"], @[@"快捷方式", @"category:shortcuts", @"hand.tap.fill"], @[@"快捷指令", @"category:commands", @"hand.raised.fill"]];
+        NSArray *categories = @[@[@"基础动作", @"category:basic", @"hand.tap"], @[@"应用打开", @"category:apps", @"hand.point.up.left.fill"], @[@"快捷方式", @"category:shortcuts", @"hand.tap.fill"], @[@"快捷指令", @"category:commands", @"hand.raised.fill"], @[@"打开链接", @"category:links", @"safari.fill"], @[@"预设链接", @"category:presets", @"link.circle.fill"]];
         for (NSArray *item in categories) [specs addObject:ABMCRow(item[0], item[1], self, [UIImage systemImageNamed:item[2]])];
     } else if ([_category isEqualToString:@"basic"]) {
         [specs addObject:[PSSpecifier groupSpecifierWithName:@"基础动作"]];
@@ -363,10 +420,42 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
         if (!groups.count) [specs addObject:[PSSpecifier groupSpecifierWithName:@"未读取到应用公开的快捷方式"]];
     } else if ([_category isEqualToString:@"commands"]) {
         [specs addObject:[PSSpecifier groupSpecifierWithName:@"快捷指令"]];
-        NSArray *names = [self workflowNames];
-        for (NSString *name in names) [specs addObject:ABMCRow(name, [@"shortcut:" stringByAppendingString:name], self, [UIImage systemImageNamed:@"shortcuts"] ?: [UIImage systemImageNamed:@"bolt.fill"])];
-        [specs addObject:ABMCRow(@"手动输入快捷指令名称", @"customCommand", self, [UIImage systemImageNamed:@"plus"] )];
-        if (!names.count) [specs addObject:[PSSpecifier groupSpecifierWithName:@"未读取到快捷指令，可使用上方手动输入"]];
+        NSArray *items = [self workflowItems];
+        for (NSDictionary *item in items) {
+            NSString *identifier = item[@"identifier"];
+            NSString *title = item[@"title"];
+            NSString *action = [NSString stringWithFormat:@"shortcutuuid:%@|%@", identifier, title];
+            [specs addObject:ABMCRow(title, action, self, [UIImage systemImageNamed:@"shortcuts"] ?: [UIImage systemImageNamed:@"bolt.fill"])];
+        }
+        [specs addObject:ABMCRow(@"手动输入快捷指令名称", @"customCommand", self, [UIImage systemImageNamed:@"plus"])];
+        if (!items.count) [specs addObject:[PSSpecifier groupSpecifierWithName:@"未读取到快捷指令，可使用上方手动输入"]];
+    } else if ([_category isEqualToString:@"links"]) {
+        [specs addObject:[PSSpecifier groupSpecifierWithName:@"自定义链接"]];
+        [specs addObject:ABMCRow(@"新增自定义链接", @"customURL", self, [UIImage systemImageNamed:@"safari.fill"])];
+        CFPropertyListRef raw = ABMCRead(CFSTR("customLinks"));
+        NSArray *saved = raw ? (__bridge_transfer NSArray *)raw : @[];
+        for (id object in [saved isKindOfClass:[NSArray class]] ? saved : @[]) {
+            if (![object isKindOfClass:[NSDictionary class]]) continue;
+            NSDictionary *link = object;
+            NSString *url = link[@"url"];
+            if (!url.length || ABMCBuiltInURL(url)) continue;
+            NSString *action = [@"customURL:" stringByAppendingString:url];
+            [specs addObject:ABMCRow(link[@"title"] ?: url, action, self, ABMCIconForAction(action, link[@"icon"]))];
+        }
+    } else if ([_category isEqualToString:@"presets"]) {
+        [specs addObject:[PSSpecifier groupSpecifierWithName:@"预设链接"]];
+        [specs addObject:ABMCRow(@"新增预设链接", @"newPreset", self, [UIImage systemImageNamed:@"plus.circle.fill"])];
+        NSArray *defaults = @[@{@"title":@"网页搜索",@"url":@"https://www.baidu.com/s?wd=$$$",@"icon":@"magnifyingglass"},@{@"title":@"地图搜索",@"url":@"maps://?q=$$$",@"icon":@"map.fill"},@{@"title":@"剪贴板搜索",@"url":@"https://www.google.com/search?q=$$$",@"icon":@"doc.on.clipboard.fill"}];
+        CFPropertyListRef raw = ABMCRead(CFSTR("presetLinks"));
+        NSArray *saved = raw ? (__bridge_transfer NSArray *)raw : @[];
+        for (id object in [defaults arrayByAddingObjectsFromArray:[saved isKindOfClass:[NSArray class]] ? saved : @[]]) {
+            if (![object isKindOfClass:[NSDictionary class]]) continue;
+            NSDictionary *link = object;
+            NSString *url = link[@"url"];
+            if (!url.length) continue;
+            NSString *action = [@"customURL:" stringByAppendingString:url];
+            [specs addObject:ABMCRow(link[@"title"] ?: url, action, self, ABMCIconForAction(action, link[@"icon"]))];
+        }
     }
     if (_category.length && _searchText.length) {
         NSMutableArray *filtered = [NSMutableArray array];
@@ -404,17 +493,37 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
     PSSpecifier *specifier = [self specifierAtIndexPath:indexPath];
     NSString *rowID = [specifier propertyForKey:@"actionID"];
     NSString *actionID = [rowID isEqualToString:@"__selected__"] ? _currentValue : rowID;
-    if (!actionID.length || [actionID hasPrefix:@"category:"] || [@[@"__test__", @"customCommand", @"none"] containsObject:actionID]) return nil;
+    if (!actionID.length || [actionID hasPrefix:@"category:"] || [@[@"__test__", @"customURL", @"customCommand", @"newPreset", @"none"] containsObject:actionID]) return nil;
     __weak typeof(self) weakSelf = self;
     UIContextualAction *edit = [UIContextualAction contextualActionWithStyle:UIContextualActionStyleNormal title:@"修改" handler:^(__unused UIContextualAction *unused, __unused UIView *source, void (^done)(BOOL)) {
-        [weakSelf promptEditActionID:actionID];
+        if ([actionID hasPrefix:@"customURL:"]) [weakSelf openLinkEditorForActionID:actionID];
+        else [weakSelf promptEditActionID:actionID];
         done(YES);
     }];
     edit.backgroundColor = [UIColor systemBlueColor];
-    NSArray *actions = [rowID isEqualToString:@"__selected__"] ? @[[UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive title:@"删除" handler:^(__unused UIContextualAction *unused, __unused UIView *source, void (^done)(BOOL)) { [weakSelf confirmDeleteActionID:actionID]; done(YES); }], edit] : @[edit];
+    BOOL allowDelete = [rowID isEqualToString:@"__selected__"] || [_category isEqualToString:@"links"] || [_category isEqualToString:@"presets"];
+    NSArray *actions = allowDelete ? @[[UIContextualAction contextualActionWithStyle:UIContextualActionStyleDestructive title:@"删除" handler:^(__unused UIContextualAction *unused, __unused UIView *source, void (^done)(BOOL)) { [weakSelf confirmDeleteActionID:actionID]; done(YES); }], edit] : @[edit];
     UISwipeActionsConfiguration *configuration = [UISwipeActionsConfiguration configurationWithActions:actions];
     configuration.performsFirstActionWithFullSwipe = NO;
     return configuration;
+}
+
+- (NSString *)linkStorageKeyForURL:(NSString *)url {
+    for (NSString *key in @[@"customLinks", @"presetLinks"]) {
+        CFPropertyListRef raw = ABMCRead((__bridge CFStringRef)key);
+        NSArray *items = raw ? (__bridge_transfer NSArray *)raw : @[];
+        for (id object in [items isKindOfClass:[NSArray class]] ? items : @[]) {
+            if ([object isKindOfClass:[NSDictionary class]] && [object[@"url"] isEqual:url]) return key;
+        }
+    }
+    return [_category isEqualToString:@"presets"] ? @"presetLinks" : @"customLinks";
+}
+
+- (void)openLinkEditorForActionID:(NSString *)actionID {
+    NSString *url = [actionID hasPrefix:@"customURL:"] ? [actionID substringFromIndex:10] : nil;
+    if (!url.length) return;
+    ABMCLinkEditorController *editor = [[ABMCLinkEditorController alloc] initWithPreferenceKey:[self linkStorageKeyForURL:url] existingURL:url];
+    [self.navigationController pushViewController:editor animated:YES];
 }
 
 - (void)promptEditActionID:(NSString *)actionID {
@@ -457,6 +566,8 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
         ABMCActionListController *child = [[ABMCActionListController alloc] initWithPreferenceKey:_prefKey category:[actionID substringFromIndex:9]];
         [self.navigationController pushViewController:child animated:YES]; return;
     }
+    if ([actionID isEqualToString:@"newPreset"]) { [self.navigationController pushViewController:[[ABMCLinkEditorController alloc] initWithPreferenceKey:@"presetLinks" existingURL:nil] animated:YES]; return; }
+    if ([actionID isEqualToString:@"customURL"]) { [self.navigationController pushViewController:[[ABMCLinkEditorController alloc] initWithPreferenceKey:_prefKey existingURL:nil] animated:YES]; return; }
     if ([actionID isEqualToString:@"customCommand"]) { [self promptForValueWithTitle:@"快捷指令" prefix:@"shortcut:"]; return; }
     NSString *appName = [specifier propertyForKey:@"appName"];
     [self saveAction:actionID title:nil icon:nil appName:appName];
@@ -482,6 +593,18 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
     NSMutableDictionary *metadata = [NSMutableDictionary dictionaryWithDictionary:[oldMetadata isKindOfClass:[NSDictionary class]] ? oldMetadata : @{}];
     [metadata removeObjectForKey:actionID];
     ABMCWrite(CFSTR("actionMetadata"), (__bridge CFPropertyListRef)metadata);
+    if ([actionID hasPrefix:@"customURL:"]) {
+        NSString *url = [actionID substringFromIndex:10];
+        NSString *storageName = [self linkStorageKeyForURL:url];
+        CFPropertyListRef linksRaw = ABMCRead((__bridge CFStringRef)storageName);
+        NSArray *saved = linksRaw ? (__bridge_transfer NSArray *)linksRaw : @[];
+        NSMutableArray *remaining = [NSMutableArray array];
+        for (id object in [saved isKindOfClass:[NSArray class]] ? saved : @[]) {
+            if ([object isKindOfClass:[NSDictionary class]] && [object[@"url"] isEqual:url]) continue;
+            [remaining addObject:object];
+        }
+        ABMCWrite((__bridge CFStringRef)storageName, (__bridge CFPropertyListRef)remaining);
+    }
     ABMCLog(@"Action deleted gesture=%@ category=%@ id=%@ selected=%@", [self gestureTitle], _category ?: @"root", actionID, selected ? @"yes" : @"no");
     CFNotificationCenterPostNotification(CFNotificationCenterGetDarwinNotifyCenter(), (__bridge CFStringRef)PREFS_NOTIFICATION, NULL, NULL, YES);
     _specifiers = nil;

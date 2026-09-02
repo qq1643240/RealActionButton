@@ -38,6 +38,7 @@ BOOL ABMCPerformingDefaultAction = NO;
 @interface ABMCActionExecutor ()
 - (void)openURLString:(NSString *)urlString;
 - (void)executeAppShortcut:(NSString *)payload;
+- (void)runShortcutWorkflowIdentifier:(NSString *)payload;
 - (BOOL)invokeCandidates:(NSArray<NSString *> *)selectors classes:(NSArray<NSString *> *)classes argument:(id)argument;
 - (void)performNamedSystemAction:(NSString *)action;
 - (void)invokeSystemAction:(NSString *)selectorName;
@@ -142,8 +143,12 @@ BOOL ABMCPerformingDefaultAction = NO;
         [self openApp:[actionID substringFromIndex:4]];
     } else if ([actionID hasPrefix:@"appshortcut:"]) {
         [self executeAppShortcut:[actionID substringFromIndex:12]];
+    } else if ([actionID hasPrefix:@"shortcutuuid:"]) {
+        [self runShortcutWorkflowIdentifier:[actionID substringFromIndex:13]];
     } else if ([actionID hasPrefix:@"shortcut:"]) {
         [self runShortcut:[actionID substringFromIndex:9]];
+    } else if ([actionID hasPrefix:@"customURL:"]) {
+        [self openURLString:[actionID substringFromIndex:10]];
     } else if ([actionID hasPrefix:@"url:"]) {
         [self openURLString:[actionID substringFromIndex:4]];
     }
@@ -472,7 +477,43 @@ BOOL ABMCPerformingDefaultAction = NO;
     [self openApp:bundleID];
 }
 
-#pragma mark - Run Shortcut
+- (void)runShortcutWorkflowIdentifier:(NSString *)payload {
+    NSArray *parts = [payload componentsSeparatedByString:@"|"];
+    NSString *identifier = parts.firstObject;
+    NSString *title = parts.count > 1 ? parts[1] : @"";
+    if (!identifier.length) return;
+    @try {
+        ABMCLoadShortcutsRuntime();
+        id shortcut = nil;
+        for (NSString *className in @[@"SBSApplicationShortcutItem", @"SBApplicationShortcutItem", @"WFWorkflowShortcutItem"]) {
+            Class cls = NSClassFromString(className);
+            SEL initializer = NSSelectorFromString(@"initWithWorkflowIdentifier:");
+            if (!cls || ![cls instancesRespondToSelector:initializer]) continue;
+            shortcut = ((id(*)(id,SEL,id))objc_msgSend)([cls alloc], initializer, identifier);
+            if (shortcut) break;
+        }
+        Class storeClass = NSClassFromString(@"SBApplicationShortcutStore");
+        id store = storeClass && [storeClass respondsToSelector:NSSelectorFromString(@"sharedInstance")] ? ((id(*)(id,SEL))objc_msgSend)(storeClass, NSSelectorFromString(@"sharedInstance")) : nil;
+        SEL activateSelector = NSSelectorFromString(@"activateShortcut:withBundleIdentifier:forIconView:");
+        if (shortcut && store && [store respondsToSelector:activateSelector]) {
+            ((void(*)(id,SEL,id,id,id))objc_msgSend)(store, activateSelector, shortcut, @"com.apple.shortcuts", nil);
+            ABMCLog(@"Shortcut UUID activated through SpringBoard identifier=%@", identifier);
+            return;
+        }
+        for (NSString *selectorName in @[@"activateShortcut:forBundleIdentifier:", @"activateShortcutItem:forBundleIdentifier:", @"executeShortcut:withBundleIdentifier:"]) {
+            SEL selector = NSSelectorFromString(selectorName);
+            if (shortcut && store && [store respondsToSelector:selector]) {
+                ((void(*)(id,SEL,id,id))objc_msgSend)(store, selector, shortcut, @"com.apple.shortcuts");
+                ABMCLog(@"Shortcut UUID activated fallback identifier=%@ selector=%@", identifier, selectorName);
+                return;
+            }
+        }
+        ABMCLog(@"Shortcut UUID SpringBoard interface unavailable identifier=%@", identifier);
+    } @catch (NSException *exception) {
+        ABMCLog(@"Shortcut UUID activation failed identifier=%@ exception=%@", identifier, exception.reason ?: @"unknown");
+    }
+    if (title.length) [self runShortcut:title];
+}
 
 - (void)runShortcut:(NSString *)name {
     if (!name.length) return;
