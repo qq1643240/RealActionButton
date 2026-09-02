@@ -96,7 +96,7 @@ static UIImage *ABMCIconFromSpringBoard(NSString *bundleID) {
     if (!bundleID.length) return nil;
     id cached = ABMCAppIconCache()[bundleID];
     if (cached) return cached == NSNull.null ? nil : cached;
-    CFDataRef rawData = ABMCCopyIconData((__bridge CFStringRef)bundleID);
+    CFDataRef rawData = ABMCopyIconData((__bridge CFStringRef)bundleID);
     UIImage *image = rawData ? [UIImage imageWithData:(__bridge NSData *)rawData] : nil;
     if (rawData) CFRelease(rawData);
     ABMCAppIconCache()[bundleID] = image ?: NSNull.null;
@@ -123,7 +123,7 @@ static NSString *ABMCActionTitle(NSString *actionID) {
     NSDictionary *meta = ABMCMetadata(actionID);
     NSString *custom = [meta[@"title"] isKindOfClass:[NSString class]] ? meta[@"title"] : nil;
     if (custom.length && ![custom isEqualToString:actionID]) return custom;
-    NSDictionary *titles = @{@"default":@"系统默认", @"flashlight":@"手电筒", @"camera":@"相机", @"silent":@"静音模式", @"screenshot":@"屏幕截图", @"lock":@"锁定屏幕", @"respring":@"重启桌面", @"controlCenter":@"控制中心", @"notificationCenter":@"通知中心", @"spotlight":@"聚焦搜索", @"screenRecord":@"屏幕录制", @"mediaPlayPause":@"播放暂停", @"mediaPrevious":@"上一首歌", @"mediaNext":@"下一首歌", @"closeApps":@"关闭应用", @"none":@"关闭动作", @"url:weixin://scanqrcode":@"微信扫一扫", @"url:weixin://widget/pay":@"微信付款码", @"url:alipay://platformapi/startapp?appId=10000007":@"支付宝扫一扫", @"url:alipay://platformapi/startapp?appId=20000056":@"支付宝付款码"};
+    NSDictionary *titles = @{@"default":@"系统默认", @"flashlight":@"切换手电筒", @"camera":@"打开相机", @"silent":@"切换静音模式", @"screenshot":@"截屏", @"lock":@"锁定设备", @"respring":@"注销弹簧板", @"controlCenter":@"控制中心", @"notificationCenter":@"通知中心", @"spotlight":@"聚焦搜索", @"screenRecord":@"屏幕录制", @"mediaPlayPause":@"播放暂停", @"mediaPrevious":@"上一首", @"mediaNext":@"下一首", @"closeApps":@"关闭应用", @"none":@"无操作", @"url:weixin://scanqrcode":@"微信扫一扫", @"url:weixin://widget/pay":@"微信付款码", @"url:alipay://platformapi/startapp?appId=10000007":@"支付宝扫码", @"url:alipay://platformapi/startapp?appId=20000056":@"支付宝付款"};
     if (titles[actionID]) return titles[actionID];
     if ([actionID hasPrefix:@"app:"]) return meta[@"appName"] ?: [actionID substringFromIndex:4];
     if ([actionID hasPrefix:@"shortcut:"]) return [actionID substringFromIndex:9];
@@ -204,7 +204,7 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
 
 - (NSArray *)userApplications {
     @try {
-        CFArrayRef rawIdentifiers = ABMCCopyDisplayIdentifiers();
+        CFArrayRef rawIdentifiers = ABMCopyDisplayIdentifiers();
         NSArray *identifiers = rawIdentifiers ? (__bridge_transfer NSArray *)rawIdentifiers : @[];
         NSMutableArray *result = [NSMutableArray array];
         NSMutableSet *seen = [NSMutableSet set];
@@ -212,11 +212,11 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
             if (![object isKindOfClass:[NSString class]]) continue;
             NSString *bundle = object;
             if (!bundle.length || [seen containsObject:bundle]) continue;
-            CFStringRef rawName = ABMCCopyLocalizedName((__bridge CFStringRef)bundle);
+            CFStringRef rawName = ABMCopyLocalizedName((__bridge CFStringRef)bundle);
             NSString *name = rawName ? (__bridge_transfer NSString *)rawName : nil;
             if (!name.length) name = bundle;
             [seen addObject:bundle];
-            CFDataRef rawIcon = ABMCCopyIconData((__bridge CFStringRef)bundle);
+            CFDataRef rawIcon = ABMCopyIconData((__bridge CFStringRef)bundle);
             UIImage *icon = rawIcon ? [UIImage imageWithData:(__bridge NSData *)rawIcon] : nil;
             if (rawIcon) CFRelease(rawIcon);
             if (icon) ABMCAppIconCache()[bundle] = icon;
