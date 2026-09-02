@@ -3,7 +3,6 @@
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
 #import <dlfcn.h>
-#import <sqlite3.h>
 #import <SpringBoardServices/SpringBoardServices.h>
 #import "../ABMCLogger.h"
 #import "ABMCLinkEditorController.h"
@@ -44,60 +43,8 @@ static BOOL ABMCBuiltInURL(NSString *url) {
     return [@[@"weixin://scanqrcode", @"weixin://widget/pay", @"alipay://platformapi/startapp?appId=10000007", @"alipay://platformapi/startapp?appId=20000056"] containsObject:url];
 }
 
-static NSArray *ABMCShortcutNamesFromDatabase(NSString *path) {
-    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) return @[];
-    sqlite3 *database = NULL;
-    if (sqlite3_open_v2(path.UTF8String, &database, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) { if (database) sqlite3_close(database); return @[]; }
-    NSMutableOrderedSet *names = [NSMutableOrderedSet orderedSet];
-    sqlite3_stmt *tables = NULL;
-    if (sqlite3_prepare_v2(database, "SELECT name FROM sqlite_master WHERE type='table'", -1, &tables, NULL) == SQLITE_OK) {
-        while (sqlite3_step(tables) == SQLITE_ROW) {
-            const unsigned char *rawTable = sqlite3_column_text(tables, 0);
-            NSString *table = rawTable ? [NSString stringWithUTF8String:(const char *)rawTable] : nil;
-            if (!table.length || (![table.lowercaseString containsString:@"workflow"] && ![table.lowercaseString containsString:@"shortcut"])) continue;
-            NSString *pragma = [NSString stringWithFormat:@"PRAGMA table_info(\"%@\")", [table stringByReplacingOccurrencesOfString:@"\"" withString:@"\"\""]];
-            sqlite3_stmt *columns = NULL; NSString *nameColumn = nil;
-            if (sqlite3_prepare_v2(database, pragma.UTF8String, -1, &columns, NULL) == SQLITE_OK) while (sqlite3_step(columns) == SQLITE_ROW) {
-                const unsigned char *rawColumn = sqlite3_column_text(columns, 1);
-                NSString *column = rawColumn ? [NSString stringWithUTF8String:(const char *)rawColumn] : nil;
-                if ([(@[@"name", @"title", @"workflow_name", @"display_name", @"zname", @"ztitle", @"zworkflowname", @"zdisplayname"]) containsObject:column.lowercaseString]) { nameColumn = column; break; }
-            }
-            if (columns) sqlite3_finalize(columns);
-            if (!nameColumn.length) continue;
-            NSString *sql = [NSString stringWithFormat:@"SELECT \"%@\" FROM \"%@\" WHERE \"%@\" IS NOT NULL LIMIT 1000", nameColumn, table, nameColumn];
-            sqlite3_stmt *rows = NULL;
-            if (sqlite3_prepare_v2(database, sql.UTF8String, -1, &rows, NULL) == SQLITE_OK) while (sqlite3_step(rows) == SQLITE_ROW) {
-                const unsigned char *rawName = sqlite3_column_text(rows, 0);
-                if (rawName) { NSString *name = [NSString stringWithUTF8String:(const char *)rawName]; if (name.length) [names addObject:name]; }
-            }
-            if (rows) sqlite3_finalize(rows);
-        }
-    }
-    if (tables) sqlite3_finalize(tables);
-    sqlite3_close(database);
-    return names.array;
-}
-static NSArray *ABMCWorkflowItemsFromDatabase(NSString *path) {
-    if (![[NSFileManager defaultManager] fileExistsAtPath:path]) return @[];
-    sqlite3 *database = NULL;
-    if (sqlite3_open_v2(path.UTF8String, &database, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) { if (database) sqlite3_close(database); return @[]; }
-    NSMutableArray *items = [NSMutableArray array];
-    NSArray *queries = @[@"SELECT ZNAME, ZIDENTIFIER FROM ZWORKFLOW WHERE ZNAME IS NOT NULL AND ZIDENTIFIER IS NOT NULL", @"SELECT name, identifier FROM workflows WHERE name IS NOT NULL AND identifier IS NOT NULL", @"SELECT title, identifier FROM shortcuts WHERE title IS NOT NULL AND identifier IS NOT NULL"];
-    for (NSString *sql in queries) {
-        sqlite3_stmt *statement = NULL;
-        if (sqlite3_prepare_v2(database, sql.UTF8String, -1, &statement, NULL) != SQLITE_OK) continue;
-        while (sqlite3_step(statement) == SQLITE_ROW) {
-            const unsigned char *rawName = sqlite3_column_text(statement, 0);
-            const unsigned char *rawIdentifier = sqlite3_column_text(statement, 1);
-            NSString *name = rawName ? [NSString stringWithUTF8String:(const char *)rawName] : nil;
-            NSString *identifier = rawIdentifier ? [NSString stringWithUTF8String:(const char *)rawIdentifier] : nil;
-            if (name.length && identifier.length) [items addObject:@{@"title":name, @"identifier":identifier}];
-        }
-        sqlite3_finalize(statement);
-        if (items.count) break;
-    }
-    sqlite3_close(database);
-    return items;
+static void ABMCLoadShortcutsRuntime(void) {
+    for (NSString *path in @[@"/System/Library/PrivateFrameworks/IntentsCore.framework/IntentsCore", @"/System/Library/PrivateFrameworks/WorkflowKit.framework/WorkflowKit", @"/System/Library/PrivateFrameworks/WorkflowUI.framework/WorkflowUI", @"/Applications/Shortcuts.app/Shortcuts", @"/Applications/Shortcuts.app/Frameworks/WorkflowKit.framework/WorkflowKit", @"/Applications/Shortcuts.app/Frameworks/WorkflowUI.framework/WorkflowUI"]) dlopen(path.UTF8String, RTLD_LAZY | RTLD_LOCAL);
 }
 
 static NSString *ABMCLocalizedShortcutTitle(NSString *title, NSString *path) {
@@ -207,9 +154,7 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
 @interface ABMCActionListController () <UISearchBarDelegate>
 - (void)loadCurrentValueWithFallback:(NSString *)fallback;
 - (NSArray *)userApplications;
-- (NSArray *)workflowNames;
 - (NSArray *)workflowItems;
-- (NSArray *)appShortcutGroups;
 - (void)deleteActionID:(NSString *)actionID;
 - (void)confirmDeleteActionID:(NSString *)actionID;
 - (NSString *)linkStorageKeyForURL:(NSString *)url;
@@ -312,77 +257,47 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
     }
 }
 
-- (NSArray *)workflowNames {
+- (NSArray *)workflowItems {
     @try {
-        NSMutableOrderedSet *names = [NSMutableOrderedSet orderedSet];
-        for (NSString *path in @[@"/var/mobile/Library/Shortcuts/Shortcuts.plist", @"/var/mobile/Library/Shortcuts/Shortcuts.json", @"/var/mobile/Library/Shortcuts/ShortcutsStore.plist", @"/private/var/mobile/Library/Shortcuts/Shortcuts.plist", @"/private/var/mobile/Library/Shortcuts/ShortcutsStore.plist"]) {
-            NSData *data = [NSData dataWithContentsOfFile:path];
-            if (!data.length) continue;
-            id object = [path.pathExtension.lowercaseString isEqualToString:@"json"] ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : [NSPropertyListSerialization propertyListWithData:data options:NSPropertyListImmutable format:nil error:nil];
-            NSArray *items = [object isKindOfClass:[NSArray class]] ? object : ([object isKindOfClass:[NSDictionary class]] ? object[@"workflows"] ?: object[@"shortcuts"] : nil);
-            for (id item in items) {
-                NSString *name = nil;
-                if ([item isKindOfClass:[NSString class]]) name = item;
-                else if ([item isKindOfClass:[NSDictionary class]]) name = item[@"name"] ?: item[@"title"] ?: item[@"WFWorkflowName"];
-                if ([name isKindOfClass:[NSString class]] && name.length) [names addObject:name];
+        ABMCLoadShortcutsRuntime();
+        Class databaseClass = NSClassFromString(@"ICDatabase");
+        SEL sortedSelector = NSSelectorFromString(@"sortedVisibleWorkflowsByName");
+        NSMutableArray *databases = [NSMutableArray array];
+        if (databaseClass && [databaseClass respondsToSelector:sortedSelector]) [databases addObject:databaseClass];
+        for (NSString *factoryName in @[@"sharedDatabase", @"defaultDatabase", @"database"]) {
+            SEL factory = NSSelectorFromString(factoryName);
+            if (databaseClass && [databaseClass respondsToSelector:factory]) {
+                id database = ((id(*)(id,SEL))objc_msgSend)(databaseClass, factory);
+                if (database) [databases addObject:database];
             }
         }
-        for (NSString *path in @[@"/var/mobile/Library/Shortcuts/Shortcuts.sqlite", @"/var/mobile/Library/Shortcuts/Shortcuts.db", @"/var/mobile/Library/Shortcuts/ShortcutsStore.sqlite", @"/var/mobile/Library/Shortcuts/ShortcutsStore.db", @"/private/var/mobile/Library/Shortcuts/Shortcuts.sqlite", @"/private/var/mobile/Library/Shortcuts/Shortcuts.db", @"/private/var/mobile/Library/Shortcuts/ShortcutsStore.sqlite", @"/private/var/mobile/Library/Shortcuts/ShortcutsStore.db"]) for (NSString *name in ABMCShortcutNamesFromDatabase(path)) [names addObject:name];
-        ABMCLog(@"Loaded shortcut names safely count=%lu", (unsigned long)names.count);
-        return [names.array sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+        NSMutableDictionary *unique = [NSMutableDictionary dictionary];
+        for (id database in databases) {
+            if (![database respondsToSelector:sortedSelector]) continue;
+            id workflows = ((id(*)(id,SEL))objc_msgSend)(database, sortedSelector);
+            for (id workflow in [workflows conformsToProtocol:@protocol(NSFastEnumeration)] ? workflows : @[]) {
+                id rawIdentifier = nil;
+                for (NSString *selectorName in @[@"workflowIdentifier", @"identifier", @"UUID", @"uuid", @"persistentIdentifier"]) {
+                    SEL selector = NSSelectorFromString(selectorName);
+                    if ([workflow respondsToSelector:selector]) { rawIdentifier = ((id(*)(id,SEL))objc_msgSend)(workflow, selector); if (rawIdentifier) break; }
+                }
+                NSString *identifier = [rawIdentifier isKindOfClass:[NSString class]] ? rawIdentifier : [rawIdentifier respondsToSelector:@selector(UUIDString)] ? [rawIdentifier UUIDString] : [rawIdentifier description];
+                NSString *title = nil;
+                for (NSString *selectorName in @[@"name", @"localizedName", @"displayName", @"title"]) {
+                    SEL selector = NSSelectorFromString(selectorName);
+                    id value = [workflow respondsToSelector:selector] ? ((id(*)(id,SEL))objc_msgSend)(workflow, selector) : nil;
+                    if ([value isKindOfClass:[NSString class]] && [value length]) { title=value; break; }
+                }
+                if (identifier.length && title.length) unique[identifier] = @{ @"title": title, @"identifier": identifier };
+            }
+        }
+        NSArray *items = [unique.allValues sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [a[@"title"] localizedCaseInsensitiveCompare:b[@"title"]]; }];
+        ABMCLog(@"Loaded ICDatabase visible workflows count=%lu", (unsigned long)items.count);
+        return items;
     } @catch (NSException *exception) {
-        ABMCLog(@"Shortcut scan failed exception=%@", exception.reason ?: @"unknown");
+        ABMCLog(@"ICDatabase workflow read failed exception=%@", exception.reason ?: @"unknown");
         return @[];
     }
-}
-
-- (NSArray *)workflowItems {
-    NSMutableOrderedSet *items = [NSMutableOrderedSet orderedSet];
-    NSArray *paths = @[@"/var/mobile/Library/Shortcuts/Shortcuts.sqlite", @"/var/mobile/Library/Shortcuts/Shortcuts.db", @"/var/mobile/Library/Shortcuts/ShortcutsStore.sqlite", @"/var/mobile/Library/Shortcuts/ShortcutsStore.db", @"/private/var/mobile/Library/Shortcuts/Shortcuts.sqlite", @"/private/var/mobile/Library/Shortcuts/Shortcuts.db", @"/private/var/mobile/Library/Shortcuts/ShortcutsStore.sqlite", @"/private/var/mobile/Library/Shortcuts/ShortcutsStore.db"];
-    for (NSString *path in paths) for (NSDictionary *item in ABMCWorkflowItemsFromDatabase(path)) [items addObject:item];
-    NSArray *sorted = [items.array sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [a[@"title"] localizedCaseInsensitiveCompare:b[@"title"]]; }];
-    ABMCLog(@"Loaded workflow UUID items count=%lu", (unsigned long)sorted.count);
-    return sorted;
-}
-
-- (NSArray *)appShortcutGroups {
-    @try {
-        NSMutableArray *result = [NSMutableArray array];
-        for (NSDictionary *entry in [self userApplications]) {
-            id application = entry[@"proxy"];
-            id rawItems = nil;
-            for (NSString *selectorName in @[@"staticShortcutItems", @"shortcutItems", @"applicationShortcutItems"]) {
-                SEL selector = NSSelectorFromString(selectorName);
-                if (application && application != NSNull.null && [application respondsToSelector:selector]) { rawItems = ((id(*)(id,SEL))objc_msgSend)(application, selector); if (rawItems) break; }
-            }
-            NSArray *declared = [rawItems isKindOfClass:[NSArray class]] ? rawItems : @[];
-            if (!declared.count) {
-                NSString *path = entry[@"path"];
-                NSDictionary *info = path.length ? [NSDictionary dictionaryWithContentsOfFile:[path stringByAppendingPathComponent:@"Info.plist"]] : nil;
-                declared = [info[@"UIApplicationShortcutItems"] isKindOfClass:[NSArray class]] ? info[@"UIApplicationShortcutItems"] : @[];
-            }
-            NSMutableArray *items = [NSMutableArray array];
-            NSMutableSet *seen = [NSMutableSet set];
-            for (id object in declared) {
-                NSString *type = nil; NSString *title = nil;
-                if ([object isKindOfClass:[NSDictionary class]]) { type = object[@"UIApplicationShortcutItemType"]; title = object[@"UIApplicationShortcutItemTitle"]; }
-                else {
-                    for (NSString *selectorName in @[@"type", @"shortcutType"]) { SEL selector=NSSelectorFromString(selectorName); id value=[object respondsToSelector:selector]?((id(*)(id,SEL))objc_msgSend)(object,selector):nil; if ([value isKindOfClass:[NSString class]] && [value length]) { type=value; break; } }
-                    for (NSString *selectorName in @[@"localizedTitle", @"title"]) { SEL selector=NSSelectorFromString(selectorName); id value=[object respondsToSelector:selector]?((id(*)(id,SEL))objc_msgSend)(object,selector):nil; if ([value isKindOfClass:[NSString class]] && [value length]) { title=value; break; } }
-                }
-                if (!type.length || !title.length || [seen containsObject:type]) continue;
-                title = ABMCLocalizedShortcutTitle(title, entry[@"path"]);
-                if (!title.length) title = type;
-                [seen addObject:type];
-                NSString *actionID = [NSString stringWithFormat:@"appshortcut:%@|%@|%@", entry[@"bundle"], type, title];
-                UIImage *icon = ABMCIconForAction(actionID, entry[@"bundle"]) ?: [UIImage systemImageNamed:@"square.grid.2x2.fill"];
-                [items addObject:@{@"title":title, @"action":actionID, @"icon":icon}];
-            }
-            if (items.count) [result addObject:@{@"name":entry[@"name"], @"items":items}];
-        }
-        ABMCLog(@"Loaded app shortcut objects safely groups=%lu", (unsigned long)result.count);
-        return result;
-    } @catch (NSException *exception) { ABMCLog(@"App shortcut object read failed exception=%@", exception.reason ?: @"unknown"); return @[]; }
 }
 
 - (NSArray *)specifiers {
@@ -396,7 +311,7 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
         [specs addObject:[PSSpecifier groupSpecifierWithName:@"动作测试"]];
         [specs addObject:ABMCRow(@"立即测试当前动作", @"__test__", self, nil)];
         [specs addObject:[PSSpecifier groupSpecifierWithName:@"选择动作分组"]];
-        NSArray *categories = @[@[@"基础动作", @"category:basic", @"hand.tap"], @[@"应用打开", @"category:apps", @"hand.point.up.left.fill"], @[@"快捷方式", @"category:shortcuts", @"hand.tap.fill"], @[@"快捷指令", @"category:commands", @"hand.raised.fill"], @[@"打开链接", @"category:links", @"safari.fill"], @[@"预设链接", @"category:presets", @"link.circle.fill"]];
+        NSArray *categories = @[@[@"基础动作", @"category:basic", @"hand.tap"], @[@"应用打开", @"category:apps", @"hand.point.up.left.fill"], @[@"快捷指令", @"category:commands", @"hand.raised.fill"], @[@"打开链接", @"category:links", @"safari.fill"], @[@"预设链接", @"category:presets", @"link.circle.fill"]];
         for (NSArray *item in categories) [specs addObject:ABMCRow(item[0], item[1], self, [UIImage systemImageNamed:item[2]])];
     } else if ([_category isEqualToString:@"basic"]) {
         [specs addObject:[PSSpecifier groupSpecifierWithName:@"基础动作"]];
@@ -410,14 +325,6 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
             [row setProperty:entry[@"name"] forKey:@"appName"];
             [specs addObject:row];
         }
-    } else if ([_category isEqualToString:@"shortcuts"]) {
-        [specs addObject:[PSSpecifier groupSpecifierWithName:@"快捷方式"]];
-        NSArray *groups = [self appShortcutGroups];
-        for (NSDictionary *group in groups) {
-            [specs addObject:[PSSpecifier groupSpecifierWithName:group[@"name"]]];
-            for (NSDictionary *item in group[@"items"]) [specs addObject:ABMCRow(item[@"title"], item[@"action"], self, item[@"icon"] )];
-        }
-        if (!groups.count) [specs addObject:[PSSpecifier groupSpecifierWithName:@"未读取到应用公开的快捷方式"]];
     } else if ([_category isEqualToString:@"commands"]) {
         [specs addObject:[PSSpecifier groupSpecifierWithName:@"快捷指令"]];
         NSArray *items = [self workflowItems];

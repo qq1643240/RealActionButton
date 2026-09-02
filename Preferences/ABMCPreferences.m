@@ -15,8 +15,10 @@ static NSString *titleForActionID(NSString *actionID) {
     NSString *fixed = titles[actionID];
     if (fixed) return fixed;
     if ([actionID hasPrefix:@"app:"]) return meta[@"appName"] ?: [actionID substringFromIndex:4];
+    if ([actionID hasPrefix:@"shortcutuuid:"]) { NSArray *parts=[[actionID substringFromIndex:13] componentsSeparatedByString:@"|"]; return parts.count>1 ? parts[1] : @"快捷指令"; }
     if ([actionID hasPrefix:@"shortcut:"]) return [actionID substringFromIndex:9];
     if ([actionID hasPrefix:@"appshortcut:"]) { NSArray *parts=[[actionID substringFromIndex:12] componentsSeparatedByString:@"|"]; return parts.count>2 ? parts[2] : @"快捷方式"; }
+    if ([actionID hasPrefix:@"customURL:"]) return @"自定义链接";
     return actionID.length ? actionID : @"无操作";
 }
 

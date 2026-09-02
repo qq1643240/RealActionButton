@@ -512,48 +512,49 @@ BOOL ABMCPerformingDefaultAction = NO;
     } @catch (NSException *exception) {
         ABMCLog(@"Shortcut UUID activation failed identifier=%@ exception=%@", identifier, exception.reason ?: @"unknown");
     }
-    if (title.length) [self runShortcut:title];
+    if (title.length) ABMCLog(@"Shortcut UUID activation unavailable; no recursive name fallback title=%@", title);
 }
 
 - (void)runShortcut:(NSString *)name {
     if (!name.length) return;
     @try {
         ABMCLoadShortcutsRuntime();
-        Class databaseClass = NSClassFromString(@"WFWorkflowDatabase");
-        id database = nil;
-        for (NSString *factoryName in @[@"defaultDatabase", @"sharedDatabase", @"database"]) { SEL selector=NSSelectorFromString(factoryName); if (databaseClass && [databaseClass respondsToSelector:selector]) { database=((id(*)(id,SEL))objc_msgSend)(databaseClass,selector); if (database) break; } }
-        id workflow = nil;
-        for (NSString *selectorName in @[@"workflowWithName:", @"workflowNamed:", @"workflowForName:"]) { SEL selector=NSSelectorFromString(selectorName); if (database && [database respondsToSelector:selector]) { workflow=((id(*)(id,SEL,id))objc_msgSend)(database,selector,name); if (workflow) break; } }
-        if (!workflow && database) for (NSString *selectorName in @[@"workflows", @"allWorkflows"]) { SEL selector=NSSelectorFromString(selectorName); id workflows=[database respondsToSelector:selector]?((id(*)(id,SEL))objc_msgSend)(database,selector):nil; for (id candidate in [workflows conformsToProtocol:@protocol(NSFastEnumeration)] ? workflows : @[]) { SEL nameSelector=NSSelectorFromString(@"name"); NSString *candidateName=[candidate respondsToSelector:nameSelector]?((id(*)(id,SEL))objc_msgSend)(candidate,nameSelector):nil; if ([candidateName isEqualToString:name]) { workflow=candidate; break; } } if (workflow) break; }
-        if (!workflow) {
-            for (NSString *className in @[@"WFWorkflowRunnerClient", @"WFWorkflowRunner", @"WFWorkflowExecutionService"]) {
-                Class runnerClass = NSClassFromString(className);
-                if (!runnerClass) continue;
-                NSMutableArray *targets = [NSMutableArray array];
-                for (NSString *factoryName in @[@"sharedInstance", @"sharedClient", @"defaultClient", @"defaultRunner"]) { SEL selector=NSSelectorFromString(factoryName); if ([runnerClass respondsToSelector:selector]) { id target=((id(*)(id,SEL))objc_msgSend)(runnerClass,selector); if (target) [targets addObject:target]; } }
-                id allocated = [[runnerClass alloc] init]; if (allocated) [targets addObject:allocated];
-                for (id target in targets) for (NSString *selectorName in @[@"runWorkflowWithName:", @"runShortcutWithName:", @"executeWorkflowNamed:", @"runWorkflowNamed:"]) { SEL selector=NSSelectorFromString(selectorName); if (![target respondsToSelector:selector]) continue; ((void(*)(id,SEL,id))objc_msgSend)(target,selector,name); ABMCLog(@"Shortcut runner name request name=%@ class=%@ selector=%@",name,className,selectorName); return; }
-            }
-            ABMCLog(@"Shortcut workflow not found and runner name interface unavailable name=%@", name);
-            return;
-        }
-        for (NSString *className in @[@"WFWorkflowRunnerClient", @"WFWorkflowRunner", @"WFWorkflowExecutionService"]) {
-            Class runnerClass = NSClassFromString(className);
-            if (!runnerClass) continue;
-            NSMutableArray *targets = [NSMutableArray array];
-            for (NSString *factoryName in @[@"sharedInstance", @"sharedClient", @"defaultClient", @"defaultRunner"]) { SEL selector=NSSelectorFromString(factoryName); if ([runnerClass respondsToSelector:selector]) { id target=((id(*)(id,SEL))objc_msgSend)(runnerClass,selector); if (target) [targets addObject:target]; } }
-            id allocated = [[runnerClass alloc] init]; if (allocated) [targets addObject:allocated];
-            for (id target in targets) for (NSString *selectorName in @[@"runWorkflow:withInput:completionHandler:", @"runWorkflow:withInput:source:completionHandler:", @"runWorkflow:withInput:", @"runWorkflow:", @"executeWorkflow:"]) {
-                SEL selector=NSSelectorFromString(selectorName); if (![target respondsToSelector:selector]) continue;
-                if ([selectorName isEqualToString:@"runWorkflow:withInput:completionHandler:"]) ((void(*)(id,SEL,id,id,id))objc_msgSend)(target,selector,workflow,nil,nil);
-                else if ([selectorName isEqualToString:@"runWorkflow:withInput:source:completionHandler:"]) ((void(*)(id,SEL,id,id,id,id))objc_msgSend)(target,selector,workflow,nil,nil,nil);
-                else if ([selectorName isEqualToString:@"runWorkflow:withInput:"]) ((void(*)(id,SEL,id,id))objc_msgSend)(target,selector,workflow,nil);
-                else ((void(*)(id,SEL,id))objc_msgSend)(target,selector,workflow);
-                ABMCLog(@"Shortcut runner requested name=%@ class=%@ selector=%@", name, className, selectorName); return;
+        Class databaseClass = NSClassFromString(@"ICDatabase");
+        SEL sortedSelector = NSSelectorFromString(@"sortedVisibleWorkflowsByName");
+        NSMutableArray *databases = [NSMutableArray array];
+        if (databaseClass && [databaseClass respondsToSelector:sortedSelector]) [databases addObject:databaseClass];
+        for (NSString *factoryName in @[@"sharedDatabase", @"defaultDatabase", @"database"]) {
+            SEL factory = NSSelectorFromString(factoryName);
+            if (databaseClass && [databaseClass respondsToSelector:factory]) {
+                id database = ((id(*)(id,SEL))objc_msgSend)(databaseClass, factory);
+                if (database) [databases addObject:database];
             }
         }
-        ABMCLog(@"Shortcut runner unavailable name=%@", name);
-    } @catch (NSException *exception) { ABMCLog(@"Shortcut runner failed name=%@ exception=%@", name, exception.reason ?: @"unknown"); }
+        for (id database in databases) {
+            if (![database respondsToSelector:sortedSelector]) continue;
+            id workflows = ((id(*)(id,SEL))objc_msgSend)(database, sortedSelector);
+            for (id workflow in [workflows conformsToProtocol:@protocol(NSFastEnumeration)] ? workflows : @[]) {
+                NSString *workflowName = nil;
+                for (NSString *selectorName in @[@"name", @"localizedName", @"displayName", @"title"]) {
+                    SEL selector = NSSelectorFromString(selectorName);
+                    id value = [workflow respondsToSelector:selector] ? ((id(*)(id,SEL))objc_msgSend)(workflow, selector) : nil;
+                    if ([value isKindOfClass:[NSString class]] && [value length]) { workflowName = value; break; }
+                }
+                if (![workflowName isEqualToString:name]) continue;
+                id rawIdentifier = nil;
+                for (NSString *selectorName in @[@"workflowIdentifier", @"identifier", @"UUID", @"uuid", @"persistentIdentifier"]) {
+                    SEL selector = NSSelectorFromString(selectorName);
+                    if ([workflow respondsToSelector:selector]) { rawIdentifier = ((id(*)(id,SEL))objc_msgSend)(workflow, selector); if (rawIdentifier) break; }
+                }
+                NSString *identifier = [rawIdentifier isKindOfClass:[NSString class]] ? rawIdentifier : [rawIdentifier respondsToSelector:@selector(UUIDString)] ? [rawIdentifier UUIDString] : [rawIdentifier description];
+                if (identifier.length) { [self runShortcutWorkflowIdentifier:[NSString stringWithFormat:@"%@|%@", identifier, workflowName]]; return; }
+            }
+        }
+        ABMCLog(@"ICDatabase workflow not found name=%@", name);
+    } @catch (NSException *exception) {
+        ABMCLog(@"ICDatabase workflow lookup failed name=%@ exception=%@", name, exception.reason ?: @"unknown");
+    }
 }
+
 
 @end
