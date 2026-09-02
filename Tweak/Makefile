@@ -7,6 +7,7 @@ TWEAK_NAME = RealActionButton
 $(TWEAK_NAME)_FILES = Tweak.x ABMCClickManager.m ABMCActionExecutor.m ../ABMCLogger.m
 $(TWEAK_NAME)_CFLAGS = -fobjc-arc -I..
 $(TWEAK_NAME)_FRAMEWORKS = UIKit AudioToolbox AVFoundation
+$(TWEAK_NAME)_PRIVATE_FRAMEWORKS = SpringBoardServices
 
 include $(THEOS)/makefiles/common.mk
 include $(THEOS_MAKE_PATH)/tweak.mk

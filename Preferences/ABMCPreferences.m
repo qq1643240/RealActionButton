@@ -1,6 +1,7 @@
 #import "ABMCPreferences.h"
 #import <Preferences/PSSpecifier.h>
 #import <UIKit/UIKit.h>
+#import <SpringBoardServices/SpringBoardServices.h>
 
 #define PREFS_DOMAIN @"com.huynguyen.actionbuttonmulticlick"
 
@@ -34,9 +35,26 @@ static NSString *titleForActionID(NSString *actionID) {
 }
 
 static UIImage *iconForActionID(NSString *actionID) {
+    CFPropertyListRef rawMeta = CFPreferencesCopyValue(CFSTR("actionMetadata"), (__bridge CFStringRef)PREFS_DOMAIN, kCFPreferencesCurrentUser, kCFPreferencesAnyHost);
+    NSDictionary *allMeta = rawMeta ? (__bridge_transfer NSDictionary *)rawMeta : @{};
+    NSDictionary *meta = [allMeta isKindOfClass:[NSDictionary class]] ? allMeta[actionID] : nil;
+    NSString *customIcon = [meta[@"icon"] isKindOfClass:[NSString class]] ? meta[@"icon"] : nil;
+    if ([customIcon containsString:@"."]) {
+        CFDataRef rawIcon = SBSCopyIconImagePNGDataForDisplayIdentifier((__bridge CFStringRef)customIcon);
+        UIImage *image = rawIcon ? [UIImage imageWithData:(__bridge NSData *)rawIcon] : nil;
+        if (rawIcon) CFRelease(rawIcon);
+        if (image) return image;
+    }
+    if (customIcon.length) { UIImage *symbol = [UIImage systemImageNamed:customIcon]; if (symbol) return symbol; }
+    if ([actionID hasPrefix:@"app:"]) {
+        NSString *bundle = [actionID substringFromIndex:4];
+        CFDataRef rawIcon = SBSCopyIconImagePNGDataForDisplayIdentifier((__bridge CFStringRef)bundle);
+        UIImage *image = rawIcon ? [UIImage imageWithData:(__bridge NSData *)rawIcon] : nil;
+        if (rawIcon) CFRelease(rawIcon);
+        if (image) return image;
+    }
     NSDictionary *symbols = @{@"default":@"hand.tap.fill", @"flashlight":@"flashlight.on.fill", @"camera":@"camera.fill", @"silent":@"speaker.slash.fill", @"screenshot":@"camera.viewfinder", @"lock":@"lock.fill", @"respring":@"arrow.clockwise", @"url:weixin://scanqrcode":@"qrcode.viewfinder", @"url:weixin://widget/pay":@"creditcard.fill", @"url:alipay://platformapi/startapp?appId=10000007":@"qrcode.viewfinder", @"url:alipay://platformapi/startapp?appId=20000056":@"creditcard.fill", @"none":@"nosign"};
-    NSString *symbol = symbols[actionID];
-    return symbol.length ? [UIImage systemImageNamed:symbol] : [UIImage systemImageNamed:@"bolt.fill"];
+    return [UIImage systemImageNamed:symbols[actionID] ?: @"bolt.fill"];
 }
 
 @implementation ABMCPreferences

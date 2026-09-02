@@ -1,6 +1,7 @@
 #import "ABMCActionExecutor.h"
 #import <UIKit/UIKit.h>
 #import <AVFoundation/AVFoundation.h>
+#import <SpringBoardServices/SpringBoardServices.h>
 #import <objc/runtime.h>
 #import <objc/message.h>
 #import <dlfcn.h>
@@ -306,30 +307,12 @@ BOOL ABMCPerformingDefaultAction = NO;
 
 - (void)openApp:(NSString *)bundleID {
     if (!bundleID.length) return;
-
     @try {
-        id app = [UIApplication sharedApplication];
-
-        // SpringBoard-native launch — instant, no LaunchServices overhead
-        SEL launchSel = NSSelectorFromString(@"launchApplicationWithIdentifier:suspended:");
-        if ([app respondsToSelector:launchSel]) {
-            ((BOOL (*)(id, SEL, id, BOOL))objc_msgSend)(app, launchSel, bundleID, NO);
-            return;
-        }
-
-        // Fallback: LSApplicationWorkspace (async to avoid freeze)
-        NSString *bid = [bundleID copy];
-        dispatch_async(dispatch_get_main_queue(), ^{
-            Class workspace = NSClassFromString(@"LSApplicationWorkspace");
-            if (!workspace) return;
-            id instance = ((id (*)(id, SEL))objc_msgSend)(workspace, NSSelectorFromString(@"defaultWorkspace"));
-            if (!instance) return;
-            SEL openSel = NSSelectorFromString(@"openApplicationWithBundleID:");
-            if ([instance respondsToSelector:openSel]) {
-                ((BOOL (*)(id, SEL, id))objc_msgSend)(instance, openSel, bid);
-            }
-        });
-    } @catch (NSException *e) {}
+        SBSLaunchApplicationWithIdentifier((__bridge CFStringRef)bundleID, false);
+        ABMCLog(@"Application launched via SpringBoardServices bundle=%@", bundleID);
+    } @catch (NSException *exception) {
+        ABMCLog(@"SpringBoardServices launch failed bundle=%@ exception=%@", bundleID, exception.reason ?: @"unknown");
+    }
 }
 
 - (BOOL)invokeCandidates:(NSArray<NSString *> *)selectors classes:(NSArray<NSString *> *)classes argument:(id)argument {

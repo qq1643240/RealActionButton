@@ -4,6 +4,7 @@
 #import <objc/message.h>
 #import <dlfcn.h>
 #import <sqlite3.h>
+#import <SpringBoardServices/SpringBoardServices.h>
 #import "../ABMCLogger.h"
 #import "ABMCLinkEditorController.h"
 
@@ -83,22 +84,18 @@ static NSMutableDictionary *ABMCAppIconCache(void) {
     dispatch_once(&onceToken, ^{ cache = [NSMutableDictionary dictionary]; });
     return cache;
 }
-static UIImage *ABMCApplicationIcon(id application) {
-    if (!application) return nil;
-    @try {
-        for (NSString *selectorName in @[@"icon", @"applicationIcon", @"iconImage"]) {
-            SEL selector = NSSelectorFromString(selectorName);
-            if (![application respondsToSelector:selector]) continue;
-            id image = ((id(*)(id,SEL))objc_msgSend)(application, selector);
-            if ([image isKindOfClass:[UIImage class]]) return image;
-        }
-    } @catch (NSException *exception) { ABMCLog(@"Application icon accessor failed exception=%@", exception.reason ?: @"unknown"); }
-    return nil;
-}
-static UIImage *ABMCAppIcon(NSString *bundleID) {
+static UIImage *ABMCIconFromSpringBoard(NSString *bundleID) {
     if (!bundleID.length) return nil;
     id cached = ABMCAppIconCache()[bundleID];
-    return cached && cached != NSNull.null && [cached isKindOfClass:[UIImage class]] ? cached : nil;
+    if (cached) return cached == NSNull.null ? nil : cached;
+    CFDataRef rawData = SBSCopyIconImagePNGDataForDisplayIdentifier((__bridge CFStringRef)bundleID);
+    UIImage *image = rawData ? [UIImage imageWithData:(__bridge NSData *)rawData] : nil;
+    if (rawData) CFRelease(rawData);
+    ABMCAppIconCache()[bundleID] = image ?: NSNull.null;
+    return image;
+}
+static UIImage *ABMCAppIcon(NSString *bundleID) {
+    return ABMCIconFromSpringBoard(bundleID);
 }
 static UIImage *ABMCIconForAction(NSString *actionID, NSString *fallbackBundle) {
     NSString *icon = ABMCMetadata(actionID)[@"icon"] ?: fallbackBundle;
@@ -199,25 +196,27 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
 
 - (NSArray *)userApplications {
     @try {
-        Class cls = NSClassFromString(@"LSApplicationWorkspace");
-        id workspace = cls && [cls respondsToSelector:NSSelectorFromString(@"defaultWorkspace")] ? ((id(*)(id,SEL))objc_msgSend)(cls, NSSelectorFromString(@"defaultWorkspace")) : nil;
-        NSArray *all = workspace && [workspace respondsToSelector:NSSelectorFromString(@"allInstalledApplications")] ? ((id(*)(id,SEL))objc_msgSend)(workspace, NSSelectorFromString(@"allInstalledApplications")) : @[];
-        NSMutableArray *result = [NSMutableArray array]; NSMutableSet *seen = [NSMutableSet set];
-        for (id app in all) {
-            NSString *bundle = ABMCString(app, @"bundleIdentifier"); NSString *name = ABMCString(app, @"localizedName"); NSString *type = ABMCString(app, @"applicationType");
-            id bundleURL = [app respondsToSelector:NSSelectorFromString(@"bundleURL")] ? ((id(*)(id,SEL))objc_msgSend)(app, NSSelectorFromString(@"bundleURL")) : nil;
-            NSString *path = [bundleURL respondsToSelector:@selector(path)] ? [bundleURL path] : @"";
-            BOOL user = [type isEqualToString:@"User"] || ([app respondsToSelector:NSSelectorFromString(@"isUserApplication")] && ((BOOL(*)(id,SEL))objc_msgSend)(app, NSSelectorFromString(@"isUserApplication")));
-            BOOL jailbreak = [path hasPrefix:@"/var/jb/"] || [path hasPrefix:@"/Applications/"];
-            if (!bundle.length || !name.length || [seen containsObject:bundle] || (!user && !jailbreak)) continue;
+        CFArrayRef rawIdentifiers = SBSCopyApplicationDisplayIdentifiers(YES, NO);
+        NSArray *identifiers = rawIdentifiers ? (__bridge_transfer NSArray *)rawIdentifiers : @[];
+        NSMutableArray *result = [NSMutableArray array];
+        NSMutableSet *seen = [NSMutableSet set];
+        for (id object in identifiers) {
+            if (![object isKindOfClass:[NSString class]]) continue;
+            NSString *bundle = object;
+            if (!bundle.length || [seen containsObject:bundle]) continue;
+            CFStringRef rawName = SBSCopyLocalizedApplicationNameForDisplayIdentifier((__bridge CFStringRef)bundle);
+            NSString *name = rawName ? (__bridge_transfer NSString *)rawName : nil;
+            if (!name.length) name = bundle;
             [seen addObject:bundle];
-            UIImage *icon = ABMCApplicationIcon(app);
+            CFDataRef rawIcon = SBSCopyIconImagePNGDataForDisplayIdentifier((__bridge CFStringRef)bundle);
+            UIImage *icon = rawIcon ? [UIImage imageWithData:(__bridge NSData *)rawIcon] : nil;
+            if (rawIcon) CFRelease(rawIcon);
             if (icon) ABMCAppIconCache()[bundle] = icon;
-            [result addObject:@{@"name":name,@"bundle":bundle,@"path":path,@"proxy":app}];
+            [result addObject:@{@"name":name, @"bundle":bundle, @"path":@""}];
         }
-        ABMCLog(@"Loaded applications via workspace count=%lu", (unsigned long)result.count);
+        ABMCLog(@"Loaded applications via SpringBoardServices count=%lu", (unsigned long)result.count);
         return [result sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) { return [a[@"name"] localizedCaseInsensitiveCompare:b[@"name"]]; }];
-    } @catch (NSException *exception) { ABMCLog(@"Application workspace read failed exception=%@", exception.reason ?: @"unknown"); return @[]; }
+    } @catch (NSException *exception) { ABMCLog(@"SpringBoard application read failed exception=%@", exception.reason ?: @"unknown"); return @[]; }
 }
 
 - (NSArray *)workflowNames {

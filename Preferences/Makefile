@@ -7,7 +7,7 @@ BUNDLE_NAME = RealActionButton
 $(BUNDLE_NAME)_FILES = ABMCPreferences.m ABMCActionListController.m ABMCLinkEditorController.m ../ABMCLogger.m
 $(BUNDLE_NAME)_CFLAGS = -fobjc-arc -I..
 $(BUNDLE_NAME)_FRAMEWORKS = UIKit
-$(BUNDLE_NAME)_PRIVATE_FRAMEWORKS = Preferences
+$(BUNDLE_NAME)_PRIVATE_FRAMEWORKS = Preferences SpringBoardServices
 $(BUNDLE_NAME)_LIBRARIES = sqlite3
 $(BUNDLE_NAME)_INSTALL_PATH = /Library/PreferenceBundles
 
