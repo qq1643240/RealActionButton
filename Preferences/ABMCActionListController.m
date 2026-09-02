@@ -212,7 +212,7 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
             for (NSString *selectorName in @[@"bundleIdentifier", @"applicationIdentifier"]) {
                 SEL selector = NSSelectorFromString(selectorName);
                 id value = [application respondsToSelector:selector] ? ((id(*)(id,SEL))objc_msgSend)(application, selector) : nil;
-                if ([value isKindOfClass:[NSString class]] && value.length) { bundle = value; break; }
+                if ([value isKindOfClass:[NSString class]] && [(NSString *)value length]) { bundle = value; break; }
             }
             if (!bundle.length || [seen containsObject:bundle]) continue;
             BOOL userApplication = YES;
@@ -230,7 +230,7 @@ static PSSpecifier *ABMCRow(NSString *title, NSString *actionID, id target, UIIm
             for (NSString *selectorName in @[@"localizedName", @"displayName"]) {
                 SEL selector = NSSelectorFromString(selectorName);
                 id value = [application respondsToSelector:selector] ? ((id(*)(id,SEL))objc_msgSend)(application, selector) : nil;
-                if ([value isKindOfClass:[NSString class]] && value.length) { name = value; break; }
+                if ([value isKindOfClass:[NSString class]] && [(NSString *)value length]) { name = value; break; }
             }
             SEL urlSelector = NSSelectorFromString(@"bundleURL");
             id url = [application respondsToSelector:urlSelector] ? ((id(*)(id,SEL))objc_msgSend)(application, urlSelector) : nil;
