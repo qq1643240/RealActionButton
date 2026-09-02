@@ -49,10 +49,6 @@ static BOOL ABMCBuiltInURL(NSString *url) {
     if ([url hasPrefix:@"customURL:"]) url = [url substringFromIndex:10];
     return [@[@"weixin://scanqrcode", @"weixin://widget/pay", @"alipay://platformapi/startapp?appId=10000007", @"alipay://platformapi/startapp?appId=20000056"] containsObject:url];
 }
-static NSString *ABMCString(id object, NSString *selectorName) {
-    SEL selector = NSSelectorFromString(selectorName);
-    return object && [object respondsToSelector:selector] ? ((id(*)(id,SEL))objc_msgSend)(object, selector) : nil;
-}
 static NSArray *ABMCShortcutNamesFromDatabase(NSString *path) {
     if (![[NSFileManager defaultManager] fileExistsAtPath:path]) return @[];
     sqlite3 *database = NULL;

@@ -1,6 +1,6 @@
 Package: com.34306.realactionbutton
 Name: RealActionButton
-Version: 1.2.16
+Version: 1.2.17
 Architecture: iphoneos-arm64e
 Description: Independent single, double and long press actions for the Action Button
 Maintainer: Little 34306
